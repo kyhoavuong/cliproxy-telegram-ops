@@ -1,0 +1,135 @@
+services:
+  cliproxy:
+    image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:v7.2.4}
+    container_name: cliproxy
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    ports:
+      - "${CLIPROXY_BIND:-127.0.0.1:3000}:3000"
+    volumes:
+      - ./config/config.yaml:/CLIProxyAPI/config.yaml
+      - ./data/auth:/data/auth
+      - ./logs:/CLIProxyAPI/logs
+    networks:
+      - cliproxy
+
+  usage-keeper:
+    image: ${USAGE_KEEPER_IMAGE:-ghcr.io/willxup/cpa-usage-keeper:v1.10.7}
+    container_name: cpa-usage-keeper
+    restart: unless-stopped
+    environment:
+      APP_PORT: 8080
+      APP_BASE_PATH: /usage
+      CPA_BASE_URL: http://cliproxy:3000
+      CPA_PUBLIC_URL: ${CPA_PUBLIC_URL:-http://localhost:3000/management.html}
+      REDIS_QUEUE_ADDR: cliproxy:3000
+      CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY}
+      AUTH_ENABLED: "true"
+      LOGIN_PASSWORD: ${USAGE_KEEPER_PASSWORD}
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+      WORK_DIR: /data
+      LOG_LEVEL: info
+      LOG_FILE_ENABLED: "true"
+      BACKUP_ENABLED: "false"
+      QUOTA_AUTO_REFRESH_ENABLED: "true"
+    volumes:
+      - ./usage-keeper:/data
+    depends_on:
+      - cliproxy
+    networks:
+      - cliproxy
+
+  quota-gate:
+    image: ${QUOTA_GATE_IMAGE:-ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:latest}
+    container_name: quota-gate
+    restart: unless-stopped
+    ports:
+      - "${QUOTA_GATE_BIND:-127.0.0.1:8081}:8081"
+    depends_on:
+      - cliproxy
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+      UPSTREAM_URL: http://cliproxy:3000
+      CLIPROXY_BASE_DIR: /opt/cliproxy
+      LISTEN_HOST: 0.0.0.0
+      LISTEN_PORT: 8081
+    volumes:
+      - ./quota-enforcer:/opt/cliproxy/quota-enforcer:ro
+      - ./usage-keeper:/opt/cliproxy/usage-keeper:ro
+    networks:
+      - cliproxy
+
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    container_name: cliproxy-cloudflared
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel --protocol http2 --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+    depends_on:
+      - cliproxy
+      - usage-keeper
+      - quota-gate
+    networks:
+      - cliproxy
+
+  telegram-alerts:
+    image: ${TELEGRAM_ALERTS_IMAGE:-ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:latest}
+    container_name: cliproxy-telegram-alerts
+    restart: unless-stopped
+    profiles:
+      - alerts
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+      CLIPROXY_BASE_DIR: /opt/cliproxy
+      ALERT_HOSTNAME: ${ALERT_HOSTNAME:-cliproxy}
+      ALERT_INTERVAL_SECONDS: ${ALERT_INTERVAL_SECONDS:-15}
+      ALERT_COMMAND_POLL_SECONDS: ${ALERT_COMMAND_POLL_SECONDS:-0.25}
+      TELEGRAM_GET_UPDATES_TIMEOUT_SECONDS: ${TELEGRAM_GET_UPDATES_TIMEOUT_SECONDS:-5}
+      ALERT_SNAPSHOT_MAX_AGE_SECONDS: ${ALERT_SNAPSHOT_MAX_AGE_SECONDS:-120}
+      USAGE_REPORT_CACHE_SECONDS: ${USAGE_REPORT_CACHE_SECONDS:-20}
+      CAPACITY_CHECK_FAST_CACHE_SECONDS: ${CAPACITY_CHECK_FAST_CACHE_SECONDS:-60}
+      QUOTA_MANAGEMENT_FAST_CACHE_SECONDS: ${QUOTA_MANAGEMENT_FAST_CACHE_SECONDS:-60}
+      ERRORS_FAST_CACHE_SECONDS: ${ERRORS_FAST_CACHE_SECONDS:-60}
+      ALERT_QUOTA_WARN_PERCENT: ${ALERT_QUOTA_WARN_PERCENT:-85}
+      ALERT_QUOTA_CRITICAL_PERCENT: ${ALERT_QUOTA_CRITICAL_PERCENT:-98}
+      USAGE_KEEPER_BASE_URL: ${USAGE_KEEPER_BASE_URL:-http://usage-keeper:8080/usage}
+      USAGE_KEEPER_PASSWORD: ${USAGE_KEEPER_PASSWORD}
+      CLIPROXY_MANAGEMENT_BASE_URL: ${CLIPROXY_MANAGEMENT_BASE_URL:-http://cliproxy:3000/v0/management}
+      CLIPROXY_MANAGEMENT_TOKEN: ${CLIPROXY_MANAGEMENT_TOKEN:-}
+      CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY:-}
+      AUTH_QUOTA_REFRESH_BEFORE_CHECK: ${AUTH_QUOTA_REFRESH_BEFORE_CHECK:-true}
+      AUTH_QUOTA_REFRESH_COOLDOWN_SECONDS: ${AUTH_QUOTA_REFRESH_COOLDOWN_SECONDS:-300}
+      AUTH_QUOTA_INSPECTION_WAIT_SECONDS: ${AUTH_QUOTA_INSPECTION_WAIT_SECONDS:-60}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      TELEGRAM_MESSAGE_MAX_CHARS: ${TELEGRAM_MESSAGE_MAX_CHARS:-3900}
+      ACTION_BACKUP_KEEP: ${ACTION_BACKUP_KEEP:-50}
+      ACTION_BACKUP_MAX_AGE_DAYS: ${ACTION_BACKUP_MAX_AGE_DAYS:-3}
+      ACTION_BACKUP_INCLUDE_USAGE_DB: ${ACTION_BACKUP_INCLUDE_USAGE_DB:-false}
+      CHANGE_WATCH_INTERVAL_SECONDS: ${CHANGE_WATCH_INTERVAL_SECONDS:-2}
+      CHANGE_NOTIFICATION_DEBOUNCE_SECONDS: ${CHANGE_NOTIFICATION_DEBOUNCE_SECONDS:-3}
+      CHANGE_REMOVAL_DEBOUNCE_SECONDS: ${CHANGE_REMOVAL_DEBOUNCE_SECONDS:-8}
+      CPA_REGISTRY_SYNC_INTERVAL_SECONDS: ${CPA_REGISTRY_SYNC_INTERVAL_SECONDS:-30}
+    volumes:
+      - ./config:/opt/cliproxy/config
+      - ./data/auth:/opt/cliproxy/data/auth:ro
+      - ./logs:/opt/cliproxy/logs:ro
+      - ./quota-enforcer:/opt/cliproxy/quota-enforcer
+      - ./usage-keeper:/opt/cliproxy/usage-keeper
+      - ./telegram-alerts/state:/state
+    depends_on:
+      - cliproxy
+      - usage-keeper
+      - quota-gate
+    networks:
+      - cliproxy
+
+networks:
+  cliproxy:
+    name: cliproxy

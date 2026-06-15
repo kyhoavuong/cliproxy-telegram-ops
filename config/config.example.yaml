@@ -1,0 +1,33 @@
+# Example CLIProxyAPI config shape for local development and documentation.
+# Copy to config/config.yaml and replace placeholders before production use.
+# The real config/config.yaml is ignored because it contains live API keys,
+# management secrets, provider settings, and auth-file references.
+
+host: 0.0.0.0
+port: 3000
+
+# Management API/UI secret. Use a long random value in production.
+management:
+  enabled: true
+  key: replace-with-management-secret
+
+# CLIProxyAPI accepts API keys from this block. quota-enforcer removes keys
+# from this list when quota is exceeded, then restores them after reset.
+api-keys:
+  - "example-user-key-000000000000000000000000"
+
+# Provider/auth shape varies by upstream CLIProxyAPI release. Keep this file as
+# a redacted structural example; check the upstream release docs before copying
+# provider-specific fields into production.
+auth-dir: /data/auth
+
+providers:
+  - name: example-openai-compatible-provider
+    base-url: https://api.example.com/v1
+    api-key: replace-with-provider-api-key
+    models:
+      - example-model
+
+logging:
+  level: info
+  dir: /CLIProxyAPI/logs

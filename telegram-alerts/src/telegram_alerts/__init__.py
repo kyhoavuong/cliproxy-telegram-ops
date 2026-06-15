@@ -1,0 +1,1 @@
+"""Telegram alerts bot package."""

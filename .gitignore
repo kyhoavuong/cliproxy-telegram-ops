@@ -1,0 +1,65 @@
+# Python build/cache artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments and editor files
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+*.swp
+*.swo
+.DS_Store
+
+# Live proxy secrets and auth state
+config/config.yaml
+config/*.local.yaml
+data/auth/
+*.token
+*.secret
+*secret*
+*token*
+*apikey*
+*api-key*
+
+# Quota enforcer runtime state
+quota-enforcer/quotas.json
+quota-enforcer/state.json
+quota-enforcer/*.lock
+quota-enforcer/*.log
+quota-enforcer/*.log.*
+
+# Runtime logs and container-owned state
+logs/
+usage-keeper/
+telegram-alerts/state/
+backups/
+manual-backups/
+
+# Databases, WAL files, and backups
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.bak
+*.backup
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Keep source-controlled templates/examples eligible
+!**/*.example
+!**/*.example.*
+!**/*.template
+!**/*.template.*
+!**/*.sample
+!**/*.sample.*
