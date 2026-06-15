@@ -1,8 +1,13 @@
 # CLIProxy Telegram Ops
 
+[![CI](https://github.com/kyhoavuong/cliproxy-telegram-ops/actions/workflows/ci.yml/badge.svg)](https://github.com/kyhoavuong/cliproxy-telegram-ops/actions/workflows/ci.yml)
+[![Docker Images](https://github.com/kyhoavuong/cliproxy-telegram-ops/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/kyhoavuong/cliproxy-telegram-ops/actions/workflows/docker-publish.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GHCR](https://img.shields.io/badge/GHCR-published-blue)](https://github.com/kyhoavuong/cliproxy-telegram-ops/pkgs/container/cliproxy-telegram-ops-alerts)
+
 Open-source operations helpers for a CLIProxyAPI stack: quota self-checks, quota enforcement helpers, usage-aware Telegram alerts, and Docker Compose examples for running the stack from published images.
 
-This repository is a sanitized public snapshot of the helper services and tests. It does not include private runtime state, auth files, API keys, usage databases, production nginx configuration, or incident/audit history.
+This repository is a sanitized open-source distribution of the helper services and tests used around a CLIProxyAPI operations stack. It does not include private runtime state, auth files, API keys, usage databases, production nginx configuration, or incident/audit history.
 
 ## Related Projects
 
@@ -12,6 +17,14 @@ This project is designed to run alongside:
 - [CPA Usage Keeper](https://github.com/Willxup/cpa-usage-keeper): usage persistence, quota cache, and usage analytics for CLIProxyAPI.
 
 `cliproxy-telegram-ops` adds Telegram operator workflows, quota enforcement helpers, health alerts, and public Docker Compose examples around that stack.
+
+## Preview
+
+Sanitized Telegram operator views:
+
+![Telegram system overview preview](docs/assets/telegram-overview-preview.svg)
+
+![Telegram key status preview](docs/assets/telegram-key-status-preview.svg)
 
 ## What Is Included
 
@@ -42,6 +55,8 @@ cloudflare/cloudflared:latest
 ## Quickstart
 
 See [docs/DOCKER_QUICKSTART.md](docs/DOCKER_QUICKSTART.md).
+
+For a system-level overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Short version:
 

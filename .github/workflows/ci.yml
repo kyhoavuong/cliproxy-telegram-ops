@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python tests and compose validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run unit tests and py_compile
+        run: scripts/check.sh
+
+      - name: Validate public compose file
+        env:
+          CPA_MANAGEMENT_KEY: example
+          USAGE_KEEPER_PASSWORD: example
+          CLOUDFLARED_TOKEN: example
+        run: docker compose -f compose.public.yaml config
