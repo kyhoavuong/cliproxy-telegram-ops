@@ -4,6 +4,15 @@ Open-source operations helpers for a CLIProxyAPI stack: quota self-checks, quota
 
 This repository is a sanitized public snapshot of the helper services and tests. It does not include private runtime state, auth files, API keys, usage databases, production nginx configuration, or incident/audit history.
 
+## Related Projects
+
+This project is designed to run alongside:
+
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI): the upstream OpenAI-compatible proxy server.
+- [CPA Usage Keeper](https://github.com/Willxup/cpa-usage-keeper): usage persistence, quota cache, and usage analytics for CLIProxyAPI.
+
+`cliproxy-telegram-ops` adds Telegram operator workflows, quota enforcement helpers, health alerts, and public Docker Compose examples around that stack.
+
 ## What Is Included
 
 - `quota-gate`: an `aiohttp` helper service for quota health and self-check endpoints.
