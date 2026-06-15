@@ -3,7 +3,7 @@
 [![CI](https://github.com/kyhoavuong/cliproxy-telegram-ops/actions/workflows/ci.yml/badge.svg)](https://github.com/kyhoavuong/cliproxy-telegram-ops/actions/workflows/ci.yml)
 [![Docker Images](https://github.com/kyhoavuong/cliproxy-telegram-ops/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/kyhoavuong/cliproxy-telegram-ops/actions/workflows/docker-publish.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![GHCR](https://img.shields.io/badge/GHCR-published-blue)](https://github.com/kyhoavuong/cliproxy-telegram-ops/pkgs/container/cliproxy-telegram-ops-alerts)
+[![GHCR Images](https://img.shields.io/badge/GHCR-images-blue)](#docker-images)
 
 Open-source operations helpers for a CLIProxyAPI stack: quota self-checks, quota enforcement helpers, usage-aware Telegram alerts, and Docker Compose examples for running the stack from published images.
 
@@ -20,7 +20,7 @@ This project is designed to run alongside:
 
 ## Preview
 
-Sanitized Telegram operator views:
+Example Telegram operator views:
 
 | System overview | Key status |
 | --- | --- |
@@ -42,6 +42,8 @@ GitHub Actions publishes helper images to GHCR:
 ```text
 ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:latest
 ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:latest
+ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:v0.1.0
+ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:v0.1.0
 ```
 
 The compose file also uses upstream images:
@@ -51,6 +53,10 @@ eceasy/cli-proxy-api:v7.2.4
 ghcr.io/willxup/cpa-usage-keeper:v1.10.7
 cloudflare/cloudflared:latest
 ```
+
+## Releases
+
+Stable release tags are published on GitHub and GHCR. See [v0.1.0](https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.1.0).
 
 ## Quickstart
 
@@ -77,6 +83,12 @@ docker compose -f compose.public.yaml up -d cliproxy usage-keeper quota-gate
 ```
 
 Edit `.env` and `config/config.yaml` before using the stack for real traffic.
+
+After setting Telegram values in `.env`, start the operator bot:
+
+```bash
+docker compose -f compose.public.yaml --profile alerts up -d telegram-alerts
+```
 
 ## Development
 
