@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     open-pull-requests-limit: 5
     commit-message:
       prefix: ci
@@ -12,6 +16,10 @@ updates:
     directory: /quota-gate
     schedule:
       interval: weekly
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
     open-pull-requests-limit: 5
     commit-message:
       prefix: build
@@ -20,6 +28,10 @@ updates:
     directory: /telegram-alerts
     schedule:
       interval: weekly
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
     open-pull-requests-limit: 5
     commit-message:
       prefix: build
