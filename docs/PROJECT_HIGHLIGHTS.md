@@ -9,6 +9,7 @@
 - Telegram operator workflows for health checks, usage reports, quota edits, key creation, key reveal, and manual key lifecycle actions.
 - Change-watch notifications that report logical system changes only after backing config or state has actually changed.
 - Alert deduplication for reauth incidents, health incidents, low GPT pool capacity, and key/quota changes.
+- GPT pool capacity handling that treats Plus-compatible Team/Edu quota windows as usable and alerts only on true Free/non-Plus evidence.
 - Latency-focused callback paths with caching and narrow refresh routes for mobile operator workflows.
 - Secret-safe rendering with tests that guard against leaking raw API keys, tokens, auth labels, and internal backup paths.
 
@@ -34,6 +35,7 @@ Operator actions
 
 - Runtime writes preserve file ownership and inode for bind-mounted config/state files.
 - Quota-disabled, manually-disabled, and deleted-key states are modeled separately to avoid false add/remove notifications.
+- A key is considered manually disabled only when manual state and active proxy-config absence agree, which prevents stale markers from surfacing false Enable options or change notifications.
 - Reauth alerts canonicalize equivalent evidence and dedupe labels by account identity.
 - Button handlers favor cached or narrow rebuild paths instead of slow full-snapshot refreshes.
 - Automatic notifications wait for observed state changes, with a fast verification path for bot-confirmed actions to avoid delays and duplicates.

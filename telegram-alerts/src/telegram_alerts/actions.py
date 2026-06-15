@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 from .contracts import TelegramReply
 
-from .settings import CLIPROXY_CONFIG, PENDING_ACTION_TTL_SECONDS, QUOTA_STATE
+from .settings import API_PUBLIC_BASE_URL, CLIPROXY_CONFIG, PENDING_ACTION_TTL_SECONDS, QUOTA_STATE
 from .storage import load_json
 from .utils import log, log_timing, mask_key, monotonic_ms, msg, now_ts, short_code
 from .keyboards import (
@@ -337,7 +337,7 @@ def execute_key_create(params: dict[str, Any]) -> str:
         "API key created.",
         "",
         f"User: {alias}",
-        "Base URL: https://api.example.com",
+        f"Base URL: {API_PUBLIC_BASE_URL}",
         f"API key: {new_key}",
         "",
         "Keep this key private.",
@@ -478,12 +478,17 @@ def execute_key_management(action_type: str, params: dict[str, Any]) -> None:
     if action_type == "key_enable":
         if key in quota_disabled:
             raise ValueError("This key is disabled by quota exhaustion and cannot be manually enabled from this action.")
+        keys = config_api_keys()
+        if key in manually_disabled and key in keys:
+            manually_disabled.discard(key)
+            set_quota_state_key_set(state_data, MANUALLY_DISABLED_KEYS_FIELD, manually_disabled)
+            save_quota_state_json(state_data)
+            raise ValueError("This key is already active.")
         if key not in manually_disabled:
             raise ValueError("This key is not marked as manually disabled.")
         if quota_item is None:
             raise ValueError("Selected key no longer exists. Open Key Status again.")
         backup_action_files("key-enable", include_usage_db=False)
-        keys = config_api_keys()
         if key not in keys:
             keys.append(key)
             write_config_api_keys(keys)
@@ -617,6 +622,7 @@ def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_
     action_type = pending.get("type")
     params = pending.get("params", {})
     changed_key = str(params.get("key") or "").strip()
+    audit_action = True
     if action_type == "key_create":
         result = reply(execute_key_create(params), key_create_actions_keyboard())
     elif action_type == "quota_set":
@@ -638,6 +644,8 @@ def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_
                 key_management_success_actions_keyboard(action_type),
             )
         except ValueError as exc:
+            changed_key = ""
+            audit_action = False
             result = reply(str(exc), key_status_keyboard())
     elif action_type == "key_reveal":
         result = reply(execute_key_reveal(params), key_reveal_actions_keyboard())
@@ -652,18 +660,19 @@ def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_
     state.pop("snapshot", None)
     state["snapshot_invalidated_at"] = now_ts()
     state["snapshot_invalidated_reason"] = action_type
-    audit = state.setdefault("action_audit", [])
-    audit_item = {
-        "at": now_ts(),
-        "type": action_type,
-        "summary": pending.get("summary", ""),
-    }
-    # Keep an operator audit trail, but do not suppress change-watch notifications:
-    # bot-created keys and bot-edited quotas still need one automatic alert.
-    if changed_key and action_type in {"key_create", "quota_set", "key_disable", "key_enable", "key_delete"}:
-        audit_item["key"] = changed_key
-    audit.append(audit_item)
-    del audit[:-20]
+    if audit_action:
+        audit = state.setdefault("action_audit", [])
+        audit_item = {
+            "at": now_ts(),
+            "type": action_type,
+            "summary": pending.get("summary", ""),
+        }
+        # Keep an operator audit trail, but do not suppress change-watch notifications:
+        # bot-created keys and bot-edited quotas still need one automatic alert.
+        if changed_key and action_type in {"key_create", "quota_set", "key_disable", "key_enable", "key_delete"}:
+            audit_item["key"] = changed_key
+        audit.append(audit_item)
+        del audit[:-20]
     log_timing("execute_pending_action", started, action=action_type)
     return result
 

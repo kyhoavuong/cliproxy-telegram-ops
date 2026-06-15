@@ -193,6 +193,7 @@ GPT_POOL_QUOTA_KEYS = {
     "secondary": "rate_limit.secondary_window",
 }
 GPT_POOL_PLUS_COMPATIBLE_PLAN_TYPES = {"plus", "team"}
+GPT_POOL_FREE_PLAN_TYPES = {"free"}
 GPT_POOL_WINDOW_SECONDS = {
     "primary": 18_000,
     "secondary": 604_800,
@@ -404,27 +405,21 @@ def gpt_pool_row_matches_plus_window(row, window_name):
 def gpt_pool_row_plus_compatible(row, window_name):
     plan = quota_row_plan_type(row)
     seconds = quota_row_window_seconds(row)
-    if plan:
-        if plan not in GPT_POOL_PLUS_COMPATIBLE_PLAN_TYPES:
-            return False
-        return gpt_pool_row_matches_plus_window(row, window_name)
+    if plan in GPT_POOL_FREE_PLAN_TYPES:
+        return False
     if gpt_pool_row_matches_plus_window(row, window_name):
         return True
+    if plan:
+        return plan in GPT_POOL_PLUS_COMPATIBLE_PLAN_TYPES and seconds is None
     # Legacy Usage Keeper test/runtime rows did not always include plan/window
     # metadata. Treat key-only rows as compatible unless they explicitly identify
     # a non-Plus window above.
     return seconds is None
 
 
-def gpt_pool_row_non_plus(row, window_name):
+def gpt_pool_row_free_plan(row):
     plan = quota_row_plan_type(row)
-    seconds = quota_row_window_seconds(row)
-    expected = gpt_pool_expected_window_seconds(window_name)
-    if plan:
-        if plan not in GPT_POOL_PLUS_COMPATIBLE_PLAN_TYPES:
-            return True
-        return seconds is not None and expected is not None and seconds != expected
-    return seconds is not None and expected is not None and seconds != expected
+    return plan in GPT_POOL_FREE_PLAN_TYPES
 
 
 def gpt_pool_window_summary(values_by_auth, token_equivalent):
@@ -474,7 +469,7 @@ def codex_free_plan_alert(capacity):
     if not account_labels:
         account_labels = [f"{count} enabled Codex account" if count == 1 else f"{count} enabled Codex accounts"]
     lines = [
-        f"- Account {label} is reported to have a Free/non-Plus quota and is excluded from the GPT Plus pool capacity."
+        f"- Account {label} is reported to have a Free quota and is excluded from the GPT Plus pool capacity."
         for label in account_labels[:15]
     ]
     if count > 15:
@@ -807,7 +802,7 @@ def _gpt_pool_capacity_snapshot(allow_management_fallback=True, recent_cache=Non
         )
         requested = set(usable_auth_indexes)
         current_left_values = {"primary": {}, "secondary": {}}
-        non_plus_auth_indexes = set()
+        free_auth_indexes = set()
         for item in payload_items(data):
             item = dict_or_empty(item)
             auth_index = identity_quota_cache_index(item)
@@ -823,8 +818,8 @@ def _gpt_pool_capacity_snapshot(allow_management_fallback=True, recent_cache=Non
                         break
                 if not window_name:
                     continue
-                if gpt_pool_row_non_plus(row, window_name):
-                    non_plus_auth_indexes.add(auth_index)
+                if gpt_pool_row_free_plan(row):
+                    free_auth_indexes.add(auth_index)
                     continue
                 if not gpt_pool_row_plus_compatible(row, window_name):
                     continue
@@ -832,21 +827,21 @@ def _gpt_pool_capacity_snapshot(allow_management_fallback=True, recent_cache=Non
                 if used is None:
                     continue
                 current_left_values[window_name][auth_index] = max(0.0, min(100.0, 100.0 - used))
-        plus_usable_auth_indexes = [auth_index for auth_index in usable_auth_indexes if auth_index not in non_plus_auth_indexes]
-        if non_plus_auth_indexes:
+        plus_usable_auth_indexes = [auth_index for auth_index in usable_auth_indexes if auth_index not in free_auth_indexes]
+        if free_auth_indexes:
             for values in current_left_values.values():
-                for auth_index in non_plus_auth_indexes:
+                for auth_index in free_auth_indexes:
                     values.pop(auth_index, None)
             free_labels = []
             free_hashes = []
-            for auth_index in sorted(non_plus_auth_indexes):
+            for auth_index in sorted(free_auth_indexes):
                 label = auth_account_actionable_label_text(identity_items_by_auth_index.get(auth_index, {}))
                 if label:
                     free_labels.append(label)
                 hash_key = auth_index_identity_key(auth_index)
                 if hash_key:
                     free_hashes.append(hash_key)
-            capacity["free_codex_count"] = len(non_plus_auth_indexes)
+            capacity["free_codex_count"] = len(free_auth_indexes)
             capacity["free_codex_labels"] = sorted(set(free_labels))
             capacity["free_codex_hashes"] = sorted(set(free_hashes))
             capacity["total_enabled_codex_count"] = len(auth_indexes)
@@ -872,7 +867,7 @@ def _gpt_pool_capacity_snapshot(allow_management_fallback=True, recent_cache=Non
         capacity["missing_rows_count"] = max(0, len(plus_usable_auth_indexes) - capacity["usage_keeper_checked_count"])
         if gpt_pool_capacity_complete(capacity):
             return capacity, next_cache
-        if not allow_management_fallback or excluded_reauth_count or non_plus_auth_indexes:
+        if not allow_management_fallback or excluded_reauth_count or free_auth_indexes:
             return capacity, next_cache
         fallback = management_gpt_pool_capacity_snapshot(enabled_count_hint=len(plus_usable_auth_indexes))
         if gpt_pool_capacity_complete(fallback):

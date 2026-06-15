@@ -29,11 +29,18 @@ Example Telegram operator views:
 ## What Is Included
 
 - `quota-gate`: an `aiohttp` helper service for quota health and self-check endpoints.
-- `telegram-alerts`: a Telegram bot for operator workflows, health alerts, quota views, usage summaries, key management, and change notifications.
-- `quota-enforcer`: a host-run Python helper for quota-based API key disable/restore flows.
+- `telegram-alerts`: a Telegram bot for operator workflows, health alerts, GPT pool capacity views, quota views, usage summaries, key management, and verified change notifications.
+- `quota-enforcer`: a host-run Python helper for quota-based API key disable/restore flows and protected key-state cleanup.
 - `compose.public.yaml`: a portable Docker Compose example that pulls published images.
 - `.env.example` and `config/config.example.yaml`: placeholder-only setup examples.
 - Unit tests for Telegram UX, alert lifecycle, change-watch behavior, and quota-enforcer parsing.
+
+## Behavior Highlights
+
+- GPT pool capacity treats Plus-compatible Team and Edu quota windows as usable capacity, while true Free/non-Plus rows are excluded and alerted.
+- Manual API-key disable/enable/delete flows mutate state first, then emit one verified system notification after the change is observed.
+- Quota-disabled, manually-disabled, deleted, and active states are modeled separately so stale manual markers do not create false Enable options or duplicate alerts.
+- Telegram callback paths use scoped picker state, secret-safe labels, fast cache paths, and narrow refreshes for responsive mobile operation.
 
 ## Docker Images
 

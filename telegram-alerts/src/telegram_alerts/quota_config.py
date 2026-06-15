@@ -401,6 +401,20 @@ def manually_disabled_keys():
     return quota_state_key_set(state, "manually_disabled_keys")
 
 
+def active_manually_disabled_keys(keys=None):
+    if keys is None:
+        keys = manually_disabled_keys()
+    else:
+        keys = {str(key or "").strip() for key in keys if str(key or "").strip()}
+    if not keys:
+        return set()
+    try:
+        config_keys = set(parse_api_keys_block(CLIPROXY_CONFIG.read_text(encoding="utf-8"))) if CLIPROXY_CONFIG.exists() else set()
+    except Exception:
+        return keys
+    return {key for key in keys if key not in config_keys}
+
+
 def quota_disabled_cpa_tombstone_keys():
     state = load_json(QUOTA_STATE, {})
     tombstones = state.get("cpa_deleted_while_quota_disabled", [])
@@ -701,15 +715,14 @@ def load_quota_data() -> tuple[str, list[dict[str, Any]], set[str], set[str]]:
             "weekly_token_limit": weekly_limit,
         })
 
+    config_keys = set()
+    if CLIPROXY_CONFIG.exists():
+        config_keys = set(parse_api_keys_block(CLIPROXY_CONFIG.read_text(encoding="utf-8")))
     disabled = set()
     disabled = quota_state_key_set(state, "disabled_by_quota")
     manual_disabled = quota_state_key_set(state, "manually_disabled_keys")
     for item in items:
-        item["manually_disabled"] = item["key"] in manual_disabled
-
-    config_keys = set()
-    if CLIPROXY_CONFIG.exists():
-        config_keys = set(parse_api_keys_block(CLIPROXY_CONFIG.read_text(encoding="utf-8")))
+        item["manually_disabled"] = item["key"] in manual_disabled and item["key"] not in config_keys
 
     return timezone_name, items, disabled, config_keys
 

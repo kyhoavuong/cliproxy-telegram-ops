@@ -133,7 +133,7 @@ def change_watch_snapshot() -> dict[str, dict[str, Any]]:
         record.setdefault("in_quota", False)
         record.setdefault("in_proxy_config", False)
         record["disabled_by_quota"] = key in disabled_keys
-        record["manually_disabled"] = key in manually_disabled_keys
+        record["manually_disabled"] = key in manually_disabled_keys and key not in proxy_keys
         record["cpa_deleted_while_quota_disabled"] = key in protected_cpa_tombstones
         record.setdefault("daily", None)
         record.setdefault("weekly", "default")
@@ -333,10 +333,12 @@ def manual_key_state_transition(old, new):
     stable_fields = ("alias", "cpa_deleted", "in_quota", "daily", "weekly", "disabled_by_quota")
     if any(old.get(field) != new.get(field) for field in stable_fields):
         return ""
-    manual_changed = old.get("manually_disabled") != new.get("manually_disabled")
+    old_manually_disabled = api_key_manually_disabled(old)
+    new_manually_disabled = api_key_manually_disabled(new)
+    manual_changed = old_manually_disabled != new_manually_disabled
     if not manual_changed:
         return ""
-    if new.get("manually_disabled"):
+    if new_manually_disabled:
         return "disabled"
     return "enabled"
 
@@ -374,6 +376,10 @@ def api_key_quota_disabled_cpa_tombstone(record):
     )
 
 
+def api_key_manually_disabled(record):
+    return isinstance(record, dict) and bool(record.get("manually_disabled")) and not bool(record.get("in_proxy_config"))
+
+
 def api_key_protected_quota_disabled_tombstone(record):
     return isinstance(record, dict) and (
         bool(record.get("cpa_deleted_while_quota_disabled"))
@@ -384,7 +390,7 @@ def api_key_protected_quota_disabled_tombstone(record):
 def api_key_quota_enforcer_silent_state(record):
     return isinstance(record, dict) and (
         bool(record.get("disabled_by_quota"))
-        or bool(record.get("manually_disabled"))
+        or api_key_manually_disabled(record)
         or bool(record.get("cpa_deleted_while_quota_disabled"))
         or api_key_quota_managed_tail(record)
     )

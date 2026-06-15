@@ -13,7 +13,7 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-BASE_DIR = Path("/opt/cliproxy")
+BASE_DIR = Path(os.environ.get("CLIPROXY_BASE_DIR", "/opt/cliproxy"))
 ENV_FILE = BASE_DIR / ".env"
 
 
@@ -219,10 +219,25 @@ def quota_state_key_set(state, name):
     }
 
 
+def active_manually_disabled_keys(state):
+    manually_disabled = quota_state_key_set(state, "manually_disabled_keys")
+    if not manually_disabled:
+        return set()
+    try:
+        if not CLIPROXY_CONFIG.exists():
+            return manually_disabled
+        _, _, _, proxy_keys = parse_api_keys_block(CLIPROXY_CONFIG.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log(f"manual-disabled proxy config check unavailable: {exc.__class__.__name__}")
+        return manually_disabled
+    proxy_key_set = {str(key or "").strip() for key in proxy_keys if str(key or "").strip()}
+    return {key for key in manually_disabled if key not in proxy_key_set}
+
+
 def prune_cpa_deleted_quota_items(cfg, state, cpa_deleted_keys, dry_run=False, cpa_evidence_reliable=True):
     deleted = {str(key or "").strip() for key in (cpa_deleted_keys or []) if str(key or "").strip()}
     disabled_by_quota = quota_state_key_set(state, "disabled_by_quota")
-    manually_disabled = quota_state_key_set(state, "manually_disabled_keys")
+    manually_disabled = active_manually_disabled_keys(state)
     protected_tombstones = quota_state_key_set(state, CPA_DELETED_WHILE_QUOTA_DISABLED_KEY)
     if cpa_evidence_reliable:
         protected_tombstones = {key for key in protected_tombstones if key in deleted}

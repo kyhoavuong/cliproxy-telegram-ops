@@ -513,7 +513,44 @@ class GptPoolCapacityTests(unittest.TestCase):
         self.assertNotIn("quota-cache-team", repr(pool))
         self.assertNotIn("internal-team-row", repr(pool))
 
-    def test_gpt_pool_capacity_excludes_unknown_explicit_non_matching_plan(self):
+    def test_gpt_pool_capacity_counts_edu_plan_with_plus_windows_as_usable_not_free(self):
+        def fake_request(path, method="GET", payload=None, cookie=None):
+            if path == "auth/login":
+                return 200, {}, "session=abc; Path=/"
+            if path.startswith("usage/identities/page"):
+                return 200, {
+                    "items": [
+                        {"id": "internal-edu-row", "identity": "quota-cache-edu", "type": "codex"},
+                    ]
+                }, ""
+            if path == "quota/cache":
+                self.assertEqual(payload, {"auth_indexes": ["quota-cache-edu"]})
+                return 200, {
+                    "items": [{
+                        "identity": "quota-cache-edu",
+                        "quotas": [
+                            {"key": "rate_limit.primary_window", "planType": "edu", "window": {"seconds": 18000}, "usedPercent": 10},
+                            {"key": "rate_limit.secondary_window", "planType": "edu", "window": {"seconds": 604800}, "usedPercent": 20},
+                        ],
+                    }]
+                }, ""
+            raise AssertionError(f"unexpected request {path}")
+
+        with mock.patch("telegram_alerts.health.USAGE_KEEPER_PASSWORD", "password"), \
+             mock.patch("telegram_alerts.health.usage_keeper_request", side_effect=fake_request):
+            pool = health.gpt_pool_capacity_snapshot(allow_management_fallback=False)
+
+        self.assertEqual(pool["enabled_codex_count"], 1)
+        self.assertNotIn("free_codex_count", pool)
+        self.assertEqual(pool["primary"]["checked_count"], 1)
+        self.assertEqual(pool["secondary"]["checked_count"], 1)
+        self.assertEqual(pool["primary"]["left_tokens"], 18_000_000.0)
+        self.assertEqual(pool["secondary"]["left_tokens"], 112_000_000.0)
+        self.assertTrue(health.gpt_pool_capacity_complete(pool))
+        self.assertNotIn("quota-cache-edu", repr(pool))
+        self.assertNotIn("internal-edu-row", repr(pool))
+
+    def test_gpt_pool_capacity_does_not_report_non_free_nonmatching_plan_as_free(self):
         def fake_request(path, method="GET", payload=None, cookie=None):
             if path == "auth/login":
                 return 200, {}, "session=abc; Path=/"
@@ -533,11 +570,12 @@ class GptPoolCapacityTests(unittest.TestCase):
              mock.patch("telegram_alerts.health.usage_keeper_request", side_effect=fake_request):
             pool = health.gpt_pool_capacity_snapshot(allow_management_fallback=False)
 
-        self.assertEqual(pool["enabled_codex_count"], 0)
-        self.assertEqual(pool["usable_codex_count"], 0)
-        self.assertEqual(pool["free_codex_count"], 1)
+        self.assertEqual(pool["enabled_codex_count"], 1)
+        self.assertNotIn("usable_codex_count", pool)
+        self.assertNotIn("free_codex_count", pool)
         self.assertEqual(pool["primary"]["checked_count"], 0)
         self.assertEqual(pool["secondary"]["checked_count"], 0)
+        self.assertEqual(pool["missing_rows_count"], 1)
         self.assertFalse(health.gpt_pool_capacity_complete(pool))
         self.assertNotIn("codex-unknown", repr(pool))
 
@@ -567,7 +605,7 @@ class GptPoolCapacityTests(unittest.TestCase):
             "enabled_codex_count": 4,
             "usable_codex_count": 4,
             "free_codex_count": 1,
-            "free_codex_labels": ["codex-ltkien23@clc.edu"],
+            "free_codex_labels": ["codex-edu-account@example.com"],
             "free_codex_hashes": [auth_index_key("codex-free")],
             "primary": {"checked_count": 4, "avg_left_percent": 80.0, "lowest_left_percent": 80.0, "left_tokens": 64_000_000.0},
             "secondary": {"checked_count": 4, "avg_left_percent": 70.0, "lowest_left_percent": 70.0, "left_tokens": 392_000_000.0},
@@ -587,12 +625,12 @@ class GptPoolCapacityTests(unittest.TestCase):
         self.assertIsNotNone(alert)
         self.assertEqual(alert["severity"], "warning")
         self.assertEqual(alert["title"], "Codex accounts downgraded to Free")
-        self.assertIn("- Account codex-ltkien23@clc.edu is reported to have a Free/non-Plus quota", alert["body"])
+        self.assertIn("- Account codex-edu-account@example.com is reported to have a Free quota", alert["body"])
         self.assertNotIn("codex-free", alert["body"])
         text = build_alert_message(Alert(**alert))
         self.assertEqual(text.splitlines()[0], "[WARN] Codex accounts downgraded to Free")
         self.assertNotIn("Impact:", text)
-        self.assertIn("Evidence:\n- Account codex-ltkien23@clc.edu is reported to have a Free/non-Plus quota and is excluded from the GPT Plus pool capacity.", text)
+        self.assertIn("Evidence:\n- Account codex-edu-account@example.com is reported to have a Free quota and is excluded from the GPT Plus pool capacity.", text)
         self.assertIn("Action:\nReplace the account or renew Plus.", text)
 
     def test_codex_free_plan_alert_falls_back_to_short_hash_without_safe_label(self):
@@ -605,7 +643,7 @@ class GptPoolCapacityTests(unittest.TestCase):
         self.assertEqual(alert.title, "Codex accounts downgraded to Free")
         text = build_alert_message(alert)
 
-        self.assertIn("- Account hash a328f1bfb2740811 is reported to have a Free/non-Plus quota", text)
+        self.assertIn("- Account hash a328f1bfb2740811 is reported to have a Free quota", text)
         self.assertNotIn("Impact:", text)
 
     def test_gpt_pool_capacity_missing_quota_rows_reduce_coverage(self):
@@ -1461,7 +1499,7 @@ class AuthReauthAlertTests(unittest.TestCase):
                 return 200, {
                     "items": [
                         {"auth_index": "enabled-codex", "identity": "codex-healthy@example.com-plus.json", "type": "codex", "disabled": False},
-                        {"auth_index": "disabled-codex", "identity": "codex-ltkien23@clc.edu-plus.json", "type": "codex", "disabled": True},
+                        {"auth_index": "disabled-codex", "identity": "codex-edu-account@example.com-plus.json", "type": "codex", "disabled": True},
                     ]
                 }, ""
             if path == "quota/cache":
@@ -1486,16 +1524,16 @@ class AuthReauthAlertTests(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         text = build_alert_message(alerts[0])
         self.assertIn("Evidence: 401 Encountered invalidated oauth token for user, failing request", text)
-        self.assertIn("- codex-ltkien23@clc.edu", text)
-        self.assertNotIn("- codex-ltkien23@clc.edu:", text)
+        self.assertIn("- codex-edu-account@example.com", text)
+        self.assertNotIn("- codex-edu-account@example.com:", text)
         self.assertNotIn("- Account ", text)
         self.assertNotIn("Account hash", text)
         self.assertIn(auth_index_key("disabled-codex"), observation["failed_auth_index_keys"])
 
     def test_multiple_reauth_accounts_render_exact_shared_evidence_template(self):
         payload = inspection_payload(
-            auth_item(name="codex-example-user-6@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-one"),
-            auth_item(name="codex-example-user-2@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-two"),
+            auth_item(name="codex-account-c@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-one"),
+            auth_item(name="codex-account-a@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-two"),
         )
 
         with mock.patch("telegram_alerts.health.quota_inspection_payload", return_value=payload):
@@ -1506,8 +1544,8 @@ class AuthReauthAlertTests(unittest.TestCase):
             "[CRITICAL] Proxy accounts need reauth",
             "",
             "Evidence: 401 Encountered invalidated oauth token for user, failing request",
-            "- codex-example-user-2@example.com",
-            "- codex-example-user-6@example.com",
+            "- codex-account-a@example.com",
+            "- codex-account-c@example.com",
             "",
             "Action:",
             "Reauth the listed account(s), then check Health alerts.",
@@ -1516,10 +1554,10 @@ class AuthReauthAlertTests(unittest.TestCase):
 
     def test_mixed_invalidated_token_evidence_renders_one_compact_group(self):
         payload = inspection_payload(
-            auth_item(name="codex-example-user-7@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-one"),
-            auth_item(name="codex-example-user-6@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-two"),
-            auth_item(name="codex-example-user-8@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-three"),
-            auth_item(name="codex-example-user-9@example.com.json", status="unauthorized_401", error="HTTP 401: Your authentication token has been invalidated. Please try signing in again.", auth_index="auth-four"),
+            auth_item(name="codex-account-e@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-one"),
+            auth_item(name="codex-account-c@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-two"),
+            auth_item(name="codex-account-h@example.com.json", status="unauthorized_401", error="HTTP 401: Encountered invalidated oauth token for user, failing request", auth_index="auth-three"),
+            auth_item(name="codex-account-g@example.com.json", status="unauthorized_401", error="HTTP 401: Your authentication token has been invalidated. Please try signing in again.", auth_index="auth-four"),
         )
 
         with mock.patch("telegram_alerts.health.quota_inspection_payload", return_value=payload):
@@ -1530,10 +1568,10 @@ class AuthReauthAlertTests(unittest.TestCase):
             "[CRITICAL] Proxy accounts need reauth",
             "",
             "Evidence: 401 Encountered invalidated oauth token for user, failing request",
-            "- codex-example-user-6@example.com",
-            "- codex-example-user-7@example.com",
-            "- codex-example-user-8@example.com",
-            "- codex-example-user-9@example.com",
+            "- codex-account-c@example.com",
+            "- codex-account-e@example.com",
+            "- codex-account-g@example.com",
+            "- codex-account-h@example.com",
             "",
             "Action:",
             "Reauth the listed account(s), then check Health alerts.",
@@ -1564,8 +1602,8 @@ class AuthReauthAlertTests(unittest.TestCase):
             "critical",
             "Proxy accounts need reauth",
             "\n".join([
-                "- example-user-6@example.com: 401 Encountered invalidated oauth token for user, failing request",
-                "- codex-example-user-6@example.com: 401 Encountered invalidated oauth token for user, failing request",
+                "- account-c@example.com: 401 Encountered invalidated oauth token for user, failing request",
+                "- codex-account-c@example.com: 401 Encountered invalidated oauth token for user, failing request",
             ]),
             "joshua",
         )
@@ -1576,21 +1614,21 @@ class AuthReauthAlertTests(unittest.TestCase):
             "[CRITICAL] Proxy accounts need reauth",
             "",
             "Evidence: 401 Encountered invalidated oauth token for user, failing request",
-            "- codex-example-user-6@example.com",
+            "- codex-account-c@example.com",
             "",
             "Action:",
             "Reauth the listed account(s), then check Health alerts.",
         ]))
-        self.assertNotIn("- example-user-6@example.com", text)
+        self.assertNotIn("- account-c@example.com", text)
 
     def test_reauth_alert_prefers_codex_email_when_plain_and_codex_labels_exist(self):
         item = auth_item(
-            name="example-user-6@example.com",
+            name="account-c@example.com",
             status="unauthorized_401",
             error="HTTP 401: Encountered invalidated oauth token for user, failing request",
             auth_index="auth-joshua",
         )
-        item["file_name"] = "codex-example-user-6@example.com.json"
+        item["file_name"] = "codex-account-c@example.com.json"
         payload = inspection_payload(item)
 
         with mock.patch("telegram_alerts.health.quota_inspection_payload", return_value=payload):
@@ -1601,12 +1639,12 @@ class AuthReauthAlertTests(unittest.TestCase):
             "[CRITICAL] Proxy accounts need reauth",
             "",
             "Evidence: 401 Encountered invalidated oauth token for user, failing request",
-            "- codex-example-user-6@example.com",
+            "- codex-account-c@example.com",
             "",
             "Action:",
             "Reauth the listed account(s), then check Health alerts.",
         ]))
-        self.assertNotIn("- example-user-6@example.com", text)
+        self.assertNotIn("- account-c@example.com", text)
 
     def test_reauth_alert_falls_back_to_short_hash_without_safe_label(self):
         identity_key = auth_index_key("opaque-auth-index")
@@ -1708,7 +1746,7 @@ class AuthReauthAlertTests(unittest.TestCase):
         self.assertNotIn("opaque-auth-file.json", body)
 
     def test_reauth_alert_evidence_masks_secret_like_account_labels(self):
-        secret_label = "sk-test-secret-like-key"
+        secret_label = "sk-test12345678901234567890"
         with mock.patch("telegram_alerts.health.quota_inspection_payload", return_value=inspection_payload(auth_item(name=secret_label))):
             alerts = check_auth_quota_status()
 
@@ -1830,7 +1868,7 @@ class AuthReauthAlertTests(unittest.TestCase):
         self.assertEqual(observation["reason"], "count-mismatch")
 
     def test_auth_quota_observation_does_not_expose_secret_like_identity(self):
-        secret_label = "sk-test-secret-like-key"
+        secret_label = "sk-test12345678901234567890"
         with mock.patch("telegram_alerts.health.quota_inspection_payload", return_value=inspection_payload(auth_item(name=secret_label, auth_index=secret_label))):
             alerts, observation = health.check_auth_quota_status_with_observation()
 
@@ -1928,13 +1966,13 @@ class AuthReauthAlertTests(unittest.TestCase):
                 "auth:quota-inspection-failed": {
                     "fingerprint": "old-hash:first",
                     "last_sent": 100,
-                    "affected_signature": ["email:example-user-10@example.com"],
+                    "affected_signature": ["email:account-f@example.com"],
                 }
             }
         }
-        alert = Alert("auth:quota-inspection-failed", "critical", "Proxy accounts need reauth", "- codex-example-user-10@example.com: token_revoked", "new-hash:changed")
+        alert = Alert("auth:quota-inspection-failed", "critical", "Proxy accounts need reauth", "- codex-account-f@example.com: token_revoked", "new-hash:changed")
         observation = auth_observation(failed=["new-hash"])
-        observation["failed_labels"] = {"new-hash": "codex-example-user-10@example.com"}
+        observation["failed_labels"] = {"new-hash": "codex-account-f@example.com"}
         sent = []
 
         with mock.patch.object(handlers, "now_ts", side_effect=[200, 215]), \
@@ -1946,7 +1984,7 @@ class AuthReauthAlertTests(unittest.TestCase):
         self.assertEqual(sent, [])
         active = state.get("active", {}).get(alert.alert_id, {})
         self.assertEqual(active.get("last_sent"), 100)
-        self.assertEqual(active.get("affected_signature"), ["email:example-user-10@example.com"])
+        self.assertEqual(active.get("affected_signature"), ["email:account-f@example.com"])
 
     def test_equivalent_reauth_evidence_change_does_not_resend_active_incident(self):
         state = {}
@@ -2012,12 +2050,12 @@ class AuthReauthAlertTests(unittest.TestCase):
 
     def test_reauth_same_label_does_not_resend_when_identity_hash_changes(self):
         state = {}
-        first = Alert("auth:quota-inspection-failed", "critical", "Proxy accounts need reauth", "- codex-example-user-10@example.com: unauthorized_401", "old-hash:first")
-        changed = Alert("auth:quota-inspection-failed", "critical", "Proxy accounts need reauth", "- codex-example-user-10@example.com: token_revoked", "new-hash:changed")
+        first = Alert("auth:quota-inspection-failed", "critical", "Proxy accounts need reauth", "- codex-account-f@example.com: unauthorized_401", "old-hash:first")
+        changed = Alert("auth:quota-inspection-failed", "critical", "Proxy accounts need reauth", "- codex-account-f@example.com: token_revoked", "new-hash:changed")
         first_observation = auth_observation(failed=["old-hash"])
-        first_observation["failed_labels"] = {"old-hash": "codex-example-user-10@example.com"}
+        first_observation["failed_labels"] = {"old-hash": "codex-account-f@example.com"}
         changed_observation = auth_observation(failed=["new-hash"])
-        changed_observation["failed_labels"] = {"new-hash": "codex-example-user-10@example.com"}
+        changed_observation["failed_labels"] = {"new-hash": "codex-account-f@example.com"}
         sent = []
 
         with mock.patch.object(handlers, "now_ts", side_effect=[100, 115, 130]), \
@@ -2030,7 +2068,7 @@ class AuthReauthAlertTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         active = state.get("active", {}).get(first.alert_id, {})
         self.assertEqual(active.get("affected_identity_keys"), ["new-hash"])
-        self.assertEqual(active.get("affected_signature"), ["email:example-user-10@example.com"])
+        self.assertEqual(active.get("affected_signature"), ["email:account-f@example.com"])
 
     def test_single_inspection_unavailable_observation_does_not_send_alert(self):
         state = {}
@@ -2295,8 +2333,8 @@ class AuthReauthAlertTests(unittest.TestCase):
             "title": "Proxy accounts need reauth",
             "severity": "critical",
             "affected_labels": {
-                "acct-bach": "codex-example-user-2@example.com",
-                "acct-nothing": "codex-example-user-11@example.com",
+                "acct-bach": "codex-account-a@example.com",
+                "acct-nothing": "codex-account-d@example.com",
             },
         })
 
@@ -2304,12 +2342,12 @@ class AuthReauthAlertTests(unittest.TestCase):
             text,
             "[OK] Proxy accounts reauth\n\n"
             "Recovered:\n"
-            "- codex-example-user-11@example.com\n"
-            "- codex-example-user-2@example.com\n\n"
+            "- codex-account-a@example.com\n"
+            "- codex-account-d@example.com\n\n"
             "Evidence: latest inspection is healthy.",
         )
-        self.assertNotIn("codex-example-user-2@example.com:", text)
-        self.assertNotIn("codex-example-user-11@example.com:", text)
+        self.assertNotIn("codex-account-a@example.com:", text)
+        self.assertNotIn("codex-account-d@example.com:", text)
         self.assertNotIn("---", text)
 
     def test_incident_lifecycle_without_ack_sends_once_recovers_and_recurs(self):

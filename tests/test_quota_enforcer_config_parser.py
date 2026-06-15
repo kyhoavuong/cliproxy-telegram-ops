@@ -142,10 +142,13 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
             self.write_quota_file(quota_path, [{"name": "Manual Disabled", "key": "manual-disabled-key", "daily_token_limit": 100}])
+            config_path.write_text("api-keys: []\n", encoding="utf-8")
             state = {"disabled_by_quota": [], "manually_disabled_keys": ["manual-disabled-key"]}
 
-            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path):
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path):
                 cfg = self.module.load_quota_config()
                 removed = self.module.prune_cpa_deleted_quota_items(
                     cfg,
@@ -159,6 +162,31 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
         self.assertEqual(removed, set())
         self.assertEqual([item["key"] for item in saved["keys"]], ["manual-disabled-key"])
         self.assertEqual(state.get("manually_disabled_keys"), ["manual-disabled-key"])
+
+    def test_cpa_deleted_prune_ignores_stale_manual_marker_when_key_is_active_in_proxy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            self.write_quota_file(quota_path, [{"name": "Stale Active", "key": "stale-active-key", "daily_token_limit": 100}])
+            config_path.write_text("api-keys:\n  - \"stale-active-key\"\n", encoding="utf-8")
+            state = {"disabled_by_quota": [], "manually_disabled_keys": ["stale-active-key"]}
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path):
+                cfg = self.module.load_quota_config()
+                removed = self.module.prune_cpa_deleted_quota_items(
+                    cfg,
+                    state,
+                    {"stale-active-key"},
+                    dry_run=False,
+                    cpa_evidence_reliable=True,
+                )
+                saved = json.loads(quota_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(removed, {"stale-active-key"})
+        self.assertEqual(saved["keys"], [])
+        self.assertEqual(state.get("manually_disabled_keys"), ["stale-active-key"])
 
     def test_over_weekly_key_is_disabled_and_kept_in_quotas(self):
         with tempfile.TemporaryDirectory() as tmp:

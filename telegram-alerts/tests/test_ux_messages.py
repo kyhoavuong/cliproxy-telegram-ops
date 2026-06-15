@@ -640,13 +640,13 @@ class TelegramUxMessageTests(unittest.TestCase):
         })
 
         text = build_usage_report(
-            {"alias": "disabled-example-user", "status": "active", "daily": 125_000_000, "weekly": 500_000_000},
+            {"alias": "huynhlehaiduong", "status": "active", "daily": 125_000_000, "weekly": 500_000_000},
             {"daily": daily, "weekly": weekly},
             "Asia/Ho_Chi_Minh",
         )
 
         expected_order = [
-            "Usage: disabled-example-user",
+            "Usage: huynhlehaiduong",
             "Status: active",
             "Today",
             "Models today",
@@ -932,7 +932,7 @@ class TelegramUxMessageTests(unittest.TestCase):
             "excluded_reauth_count": 1,
             "usable_codex_count": 6,
             "debug_identity": "codex-secret@example.com",
-            "debug_token": "sk-test-secret-like-key",
+            "debug_token": "sk-secret1234567890",
         })
         excluded_snapshot = self.capacity_snapshot(pool=excluded_pool, rows=self.healthy_user_key_rows())
         normal_snapshot = self.capacity_snapshot(
@@ -1177,6 +1177,43 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertIn("Weekly avail: 112.0M", text)
         self.assertNotIn("team-quota-cache-id", text)
 
+    def test_capacity_check_counts_edu_plan_as_usable_not_free(self):
+        def fake_request(path, method="GET", payload=None, cookie=None):
+            if path == "auth/login":
+                return 200, {}, "session=abc; Path=/"
+            if path.startswith("usage/identities/page"):
+                return 200, {"items": [{"identity": "edu-quota-cache-id", "type": "codex", "disabled": False}]}, ""
+            if path == "quota/cache":
+                self.assertEqual(payload, {"auth_indexes": ["edu-quota-cache-id"]})
+                return 200, {"items": [{
+                    "identity": "edu-quota-cache-id",
+                    "quotas": [
+                        {"key": "rate_limit.primary_window", "planType": "edu", "window": {"seconds": 18000}, "usedPercent": 0},
+                        {"key": "rate_limit.secondary_window", "planType": "edu", "window": {"seconds": 604800}, "usedPercent": 0},
+                    ],
+                }]}, ""
+            raise AssertionError(f"unexpected request {path}")
+
+        with mock.patch("telegram_alerts.health.USAGE_KEEPER_PASSWORD", "password"), \
+             mock.patch("telegram_alerts.health.usage_keeper_request", side_effect=fake_request), \
+             mock.patch("telegram_alerts.snapshot.check_http_services_detailed", return_value=[]), \
+             mock.patch("telegram_alerts.snapshot.collect_alerts_with_auth_observation", return_value=({}, auth_observation(healthy=["acct-ok"]))), \
+             mock.patch("telegram_alerts.snapshot.load_quota_context", return_value={"items": []}), \
+             mock.patch("telegram_alerts.snapshot.quota_alerts_from_context", return_value=[]), \
+             mock.patch("telegram_alerts.snapshot.quota_rows_from_context", return_value=self.healthy_user_key_rows()):
+            built = snapshot_module.build_snapshot(interactive=True, gpt_pool_management_fallback=False)
+
+        with mock.patch.object(snapshot_module, "hours_until_week_end", return_value=120.0):
+            text = snapshot_module.build_capacity_reply(built, self.capacity_rate(hourly=1_000_000))
+
+        self.assertIn("GPT Pool Capacity", text)
+        self.assertNotIn("Codex identities:", text)
+        self.assertNotIn("free", text.lower())
+        self.assertNotIn("Quota data updating", text)
+        self.assertIn("5h avail: 20.0M", text)
+        self.assertIn("Weekly avail: 140.0M", text)
+        self.assertNotIn("edu-quota-cache-id", text)
+
     def test_capacity_check_mixed_plus_team_and_true_free_renders_only_true_free(self):
         identities = [f"compat-quota-cache-{idx}" for idx in range(1, 9)] + ["true-free-quota-cache"]
 
@@ -1247,7 +1284,7 @@ class TelegramUxMessageTests(unittest.TestCase):
             rows=self.healthy_user_key_rows(),
         )
         snapshot["gpt_pool_capacity"]["debug_identity"] = "codex-secret@example.com"
-        snapshot["gpt_pool_capacity"]["debug_token"] = "sk-test-secret-like-key"
+        snapshot["gpt_pool_capacity"]["debug_token"] = "sk-secret1234567890"
 
         text = snapshot_module.build_capacity_reply(snapshot, self.capacity_rate(hourly=1_000_000))
 
@@ -1706,8 +1743,8 @@ class TelegramUxMessageTests(unittest.TestCase):
             if path.startswith("usage/identities/page"):
                 return 200, {
                     "identities": [
-                        {"identity": "codex-example-user-2@example.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1},
-                        {"identity": "codex-example-user-3@example.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1},
+                        {"identity": "codex-account-a@example.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1},
+                        {"identity": "codex-quota-primary@example.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1},
                         *[
                             {"identity": f"codex-quota-a{idx}@example.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1}
                             for idx in range(9)
@@ -1734,14 +1771,14 @@ class TelegramUxMessageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             auth_dir = Path(tmp)
             enabled = [
-                "codex-example-user-2@example.com",
-                "codex-example-user-3@example.com",
+                "codex-account-a@example.com",
                 *[f"codex-quota-a{idx}@example.com" for idx in range(9)],
+                "codex-quota-primary@example.com",
             ]
             disabled = [
-                "codex-example-user-4@example.com",
-                "codex-example-user-5@example.com",
                 *[f"codex-quota-b{idx}@example.com" for idx in range(9)],
+                "codex-quota-secondary@example.com",
+                "codex-quota-tertiary@example.com",
             ]
             for label in enabled:
                 path = auth_dir / f"{label}-plus.json"
@@ -1781,13 +1818,13 @@ class TelegramUxMessageTests(unittest.TestCase):
     def test_quota_management_handles_unavailable_quota_without_crashing_or_leaking_secrets(self):
         with tempfile.TemporaryDirectory() as tmp:
             auth_dir = Path(tmp)
-            (auth_dir / "codex-secret@example.test.json").write_text(json.dumps({"type": "codex", "disabled": False, "token": "sk-secret-value"}), encoding="utf-8")
+            (auth_dir / "codex-secret@example.com.json").write_text(json.dumps({"type": "codex", "disabled": False, "token": "sk-secret-value"}), encoding="utf-8")
             with mock.patch.object(snapshot_module, "AUTH_DIR", auth_dir, create=True), \
                  mock.patch.object(snapshot_module, "auth_management_quota_left_by_ref", return_value={}):
                 text = build_quota_management_reply({"created_at": 100})
 
         self.assertIn("(5h avail: unavailable, weekly avail: unavailable)", text)
-        self.assertNotIn("codex-secret@example.test", text)
+        self.assertNotIn("codex-secret@example.com", text)
         self.assertNotIn("sk-secret", text)
         self.assertNotIn("auth_index", text)
 
@@ -2079,11 +2116,11 @@ class TelegramUxMessageTests(unittest.TestCase):
         payload = {
             "results": [
                 {
-                    "file_name": "codex-example-user-1@example.com.json",
-                    "name": "codex-example-user-1@example.com.json",
+                    "file_name": "codex-account-b@example.com.json",
+                    "name": "codex-account-b@example.com.json",
                     "type": "codex",
                     "status": "unauthorized_401",
-                    "error": "HTTP 401 {\"error\": {\"code\": \"token_revoked\", \"message\": \"Encountered invalidated oauth token for user, failing request bearer fake_github_token_error sk-test-error-like-key cookie=session-cookie-secret api_key=ck-error-api-key management_token=mgmt-error-secret\"}}",
+                    "error": "HTTP 401 {\"error\": {\"code\": \"token_revoked\", \"message\": \"Encountered invalidated oauth token for user, failing request bearer ghp_errorbearersecret sk-errorsecret123 cookie=session-cookie-secret api_key=ck-error-api-key management_token=mgmt-error-secret\"}}",
                     "token": "sk-secret-token-value",
                     "cookie": "session-cookie-secret",
                     "api_key": "ck-secret-api-key",
@@ -2102,7 +2139,7 @@ class TelegramUxMessageTests(unittest.TestCase):
             "[CRITICAL] Proxy accounts need reauth",
             "",
             "Evidence: 401 Encountered invalidated oauth token for user, failing request",
-            "- codex-example-user-1@example.com",
+            "- codex-account-b@example.com",
             "",
             "Action:",
             "Reauth the listed account(s), then check Health alerts.",
@@ -2110,12 +2147,12 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertNotIn("- Account ", text)
         self.assertNotIn("---", text)
         self.assertNotIn("Account ending", text)
-        self.assertNotIn("fake_github_token_error", text)
-        self.assertNotIn("sk-test-error-like-key", text)
+        self.assertNotIn("ghp_errorbearersecret", text)
+        self.assertNotIn("sk-errorsecret123", text)
         self.assertNotIn("cookie=session-cookie-secret", text)
         self.assertNotIn("api_key=ck-error-api-key", text)
         self.assertNotIn("management_token=mgmt-error-secret", text)
-        self.assertNotIn("codex-example-user-1@example.com.json", text)
+        self.assertNotIn("codex-account-b@example.com.json", text)
         self.assertNotIn("token_revoked", text)
         self.assertNotIn("sk-secret-token-value", text)
         self.assertNotIn("session-cookie-secret", text)
@@ -3181,6 +3218,31 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertEqual([[button["text"] for button in row] for row in keyboard[-1:]], [["Cancel", "Menu"]])
         self.assertEqual([[button["callback_data"] for button in row] for row in keyboard[-1:]], [["menu:key_status", "menu:back"]])
 
+    def test_enable_key_picker_excludes_stale_manual_marker_for_active_proxy_key(self):
+        state = {}
+        accounts = [
+            {"key": "active-secret-key", "alias": "active"},
+            {"key": "manual-secret-key", "alias": "manual"},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text("api-keys:\n  - \"active-secret-key\"\n", encoding="utf-8")
+            with mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch("telegram_alerts.pickers.quota_accounts_for_picker", return_value=accounts), \
+                 mock.patch("telegram_alerts.pickers.manually_disabled_keys", return_value={"active-secret-key", "manual-secret-key"}), \
+                 mock.patch("telegram_alerts.pickers.short_code", return_value="picker1"):
+                result = prompt_key_management_picker(state, "enable", chat_id="chat", user_id="user")
+
+        labels = [
+            button["text"]
+            for row in result["reply_markup"]["inline_keyboard"]
+            for button in row
+        ]
+        self.assertIn("manual", labels)
+        self.assertNotIn("active", labels)
+        self.assertEqual(state["key_pickers"]["chat:user"]["keys"], ["manual-secret-key"])
+
     def test_disable_key_picker_excludes_manually_disabled_keys(self):
         state = {}
         accounts = [
@@ -3639,6 +3701,47 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertEqual(state["action_audit"][-1]["type"], "key_enable")
         self.assertEqual(state["action_audit"][-1]["key"], key)
 
+    def test_stale_key_enable_confirm_cleans_marker_without_success_audit(self):
+        key = "phat-Z7tJiOiax1TRyPbKk"
+        state = {
+            "pending_actions": {
+                "chat:user": {
+                    "code": "abc123",
+                    "type": "key_enable",
+                    "params": {"key": key, "alias": "letanphat"},
+                    "summary": "Pending key enable\n\nUser: letanphat",
+                    "expires_at": 99_999_999_999,
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            state_path = base / "state.json"
+            config_path = base / "config.yaml"
+            quota_path.write_text(
+                json.dumps({"keys": [{"name": "letanphat", "key": key, "daily_token_limit": 20_000_000}]}) + "\n",
+                encoding="utf-8",
+            )
+            state_path.write_text(json.dumps({"manually_disabled_keys": [key]}) + "\n", encoding="utf-8")
+            config_path.write_text(f'api-keys:\n  - "{key}"\n', encoding="utf-8")
+
+            with mock.patch.object(actions_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(actions_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch("telegram_alerts.actions.backup_action_files") as backup:
+                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+
+            saved_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result["text"], "This key is already active.")
+        self.assertEqual(saved_state.get("manually_disabled_keys"), [])
+        self.assertNotIn("chat:user", state.get("pending_actions", {}))
+        self.assertNotIn("action_audit", state)
+        backup.assert_not_called()
+
     def test_enable_key_flow_only_enables_manually_disabled_keys_not_quota_disabled_keys(self):
         manual_state = {
             "pending_actions": {
@@ -3860,7 +3963,7 @@ class TelegramUxMessageTests(unittest.TestCase):
     def test_errors_today_cliproxy_429_renders_backend_upstream_attribution(self):
         events = [{
             "file": "main.log",
-            "raw": "main.log: 429 | sk-test-log-like-key | 127.0.0.1 | POST \"/v1/chat/completions\" Bearer secret-token cookie=session-secret",
+            "raw": "main.log: 429 | sk-secret123 | 127.0.0.1 | POST \"/v1/chat/completions\" Bearer secret-token cookie=session-secret",
             "mtime": int(datetime(2026, 6, 13, 5, 2, 4, tzinfo=timezone.utc).timestamp()),
             "status": 429,
             "method": "POST",
@@ -3876,7 +3979,7 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertIn("- Status: 429 Backend/Upstream Rate Limited x1", text)
         self.assertNotIn("- Status: 429 Rate Limited x1", text)
         self.assertIn("- 429 came from backend/upstream; check provider/account throttling, model concurrency, or account rotation.", text)
-        self.assertNotIn("sk-test-log-like-key", text)
+        self.assertNotIn("sk-secret123", text)
         self.assertNotIn("secret-token", text)
         self.assertNotIn("session-secret", text)
 

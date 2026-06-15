@@ -7,6 +7,7 @@ from .quota_config import (
     format_effective_weekly_for_reply,
     format_limit_for_reply,
     format_operator_quota_limit,
+    active_manually_disabled_keys,
     key_accounts_for_picker,
     manually_disabled_keys,
     quota_account_by_key,
@@ -238,7 +239,7 @@ KEY_MANAGEMENT_ACTIONS = {
 
 def key_management_accounts_for_action(action):
     accounts = quota_accounts_for_picker()
-    manual_keys = manually_disabled_keys()
+    manual_keys = active_manually_disabled_keys(manually_disabled_keys())
     if action == "enable":
         return [
             account

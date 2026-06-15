@@ -43,6 +43,8 @@ CPA Usage Keeper stores request usage, quota cache data, and usage analytics. Th
 
 `telegram-alerts` is the operator interface. It sends health alerts, shows quota and usage views, supports key management workflows, and watches for real configuration changes before broadcasting change notifications.
 
+It also summarizes GPT pool capacity from Usage Keeper quota-cache data. Plus-compatible Team and Edu quota windows are counted as usable capacity; true Free/non-Plus evidence is excluded and surfaced as an alert.
+
 ## Data And State Boundaries
 
 - Public source code and examples live in Git.
@@ -52,6 +54,8 @@ CPA Usage Keeper stores request usage, quota cache data, and usage analytics. Th
 ## Notification Model
 
 Operator actions use a confirmation step before mutating runtime state. Automatic change notifications are emitted only after the system observes the real state change. Matching bot-confirmed changes use a fast verification path so the notification is timely without sending duplicates.
+
+Manual API-key state is treated as effective only when the manual marker agrees with proxy-config absence. This keeps stale manual markers from producing false Enable picker entries, incorrect Key Status rows, or duplicate manual disable/enable notifications.
 
 ## Testing Strategy
 
