@@ -22,9 +22,9 @@ This project is designed to run alongside:
 
 Sanitized Telegram operator views:
 
-![Telegram system overview preview](docs/assets/telegram-overview-preview.svg)
-
-![Telegram key status preview](docs/assets/telegram-key-status-preview.svg)
+| System overview | Key status |
+| --- | --- |
+| ![Telegram system overview preview](docs/assets/telegram-overview-preview.svg) | ![Telegram key status preview](docs/assets/telegram-key-status-preview.svg) |
 
 ## What Is Included
 
@@ -57,6 +57,8 @@ cloudflare/cloudflared:latest
 See [docs/DOCKER_QUICKSTART.md](docs/DOCKER_QUICKSTART.md).
 
 For a system-level overview, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+For a concise case-study summary, see [docs/PROJECT_HIGHLIGHTS.md](docs/PROJECT_HIGHLIGHTS.md).
 
 Short version:
 
