@@ -41,6 +41,7 @@ Example Telegram operator views:
 - Telegram access requires an allowed chat; configured user IDs narrow that access further instead of replacing the chat guard.
 - Quota self-checks avoid exposing whether arbitrary unknown API keys exist.
 - Manual API-key disable/enable/delete flows mutate state first, then emit one verified system notification after the change is observed.
+- Auth account add/remove notifications are labeled by provider, such as `Codex account added` or `Antigravity account added`.
 - Quota-disabled, manually-disabled, deleted, and active states are modeled separately so stale manual markers do not create false Enable options or duplicate alerts.
 - Telegram callback paths use scoped picker state, secret-safe labels, fast cache paths, and narrow refreshes for responsive mobile operation.
 
@@ -51,8 +52,8 @@ GitHub Actions publishes helper images to GHCR:
 ```text
 ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:latest
 ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:latest
-ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:v0.1.0
-ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:v0.1.0
+ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:v0.2.1
+ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:v0.2.1
 ```
 
 The compose file also uses upstream images:
@@ -65,7 +66,7 @@ cloudflare/cloudflared:latest
 
 ## Releases
 
-Stable release tags are published on GitHub and GHCR. See [v0.1.0](https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.1.0).
+Stable release tags are published on GitHub and GHCR. See [v0.2.1](https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.2.1).
 
 ## Quickstart
 

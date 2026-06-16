@@ -8,6 +8,7 @@
 - A quota system that tracks daily and weekly token limits, disables over-limit API keys, and restores them after reset.
 - Telegram operator workflows for health checks, usage reports, quota edits, key creation, key reveal, and manual key lifecycle actions.
 - Change-watch notifications that report logical system changes only after backing config or state has actually changed.
+- Provider-specific auth account notifications, such as `Codex account added` or `Antigravity account added`, grouped per provider and kept secret-safe.
 - Alert deduplication for reauth incidents, health incidents, low GPT pool capacity, and key/quota changes.
 - GPT pool capacity handling that treats Plus-compatible Team/Edu quota windows as usable and alerts only on true Free/non-Plus evidence.
 - Latency-focused callback paths with caching and narrow refresh routes for mobile operator workflows.
