@@ -38,6 +38,8 @@ Example Telegram operator views:
 ## Behavior Highlights
 
 - GPT pool capacity treats Plus-compatible Team and Edu quota windows as usable capacity, while true Free/non-Plus rows are excluded and alerted.
+- Telegram access requires an allowed chat; configured user IDs narrow that access further instead of replacing the chat guard.
+- Quota self-checks avoid exposing whether arbitrary unknown API keys exist.
 - Manual API-key disable/enable/delete flows mutate state first, then emit one verified system notification after the change is observed.
 - Quota-disabled, manually-disabled, deleted, and active states are modeled separately so stale manual markers do not create false Enable options or duplicate alerts.
 - Telegram callback paths use scoped picker state, secret-safe labels, fast cache paths, and narrow refreshes for responsive mobile operation.

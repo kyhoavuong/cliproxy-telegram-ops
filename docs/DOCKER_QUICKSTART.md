@@ -40,9 +40,10 @@ Edit `.env` and `config/config.yaml` before starting the stack:
 
 - Set `CPA_MANAGEMENT_KEY` and match it with the management secret in `config/config.yaml`.
 - Set `USAGE_KEEPER_PASSWORD`.
+- Set `API_PUBLIC_BASE_URL` to the public API endpoint shown in generated key messages.
 - Add real CLIProxyAPI provider/auth configuration to `config/config.yaml`.
 - Add auth JSON files under `data/auth/` if your CLIProxyAPI setup requires them.
-- Set Telegram values only if you plan to run the `alerts` profile.
+- Set Telegram values only if you plan to run the `alerts` profile. `TELEGRAM_CHAT_ID` or `TELEGRAM_ALLOWED_CHAT_IDS` must include the operator chat; `TELEGRAM_ALLOWED_USER_IDS` is optional and further restricts who can use the bot in that chat.
 - Set `CLOUDFLARED_TOKEN` only if you plan to run the `tunnel` profile.
 
 ## Start Core Services
