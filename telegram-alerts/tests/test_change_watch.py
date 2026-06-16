@@ -468,7 +468,7 @@ class CpaRegistrySyncTests(unittest.TestCase):
 
 
 class ChangeWatchNotificationTests(unittest.TestCase):
-    def test_proxy_account_removed_renders_exact_operator_template(self):
+    def test_codex_account_removed_renders_exact_operator_template(self):
         old = {"auth:codex-account-d@example.com": auth_record(alias="codex-account-d@example.com")}
         new = {}
 
@@ -477,12 +477,12 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].get("logical_type"), "auth_account_removed")
-        self.assertEqual(text, "Proxy account removed\n\n- codex-account-d@example.com")
+        self.assertEqual(text, "Codex account removed\n\n- codex-account-d@example.com")
         self.assertNotIn("Account:", text)
         self.assertNotIn("Removed from:", text)
         self.assertNotIn("---", text)
 
-    def test_proxy_account_added_renders_exact_operator_template(self):
+    def test_codex_account_added_renders_exact_operator_template(self):
         old = {}
         new = {"auth:codex-account-d@example.com": auth_record(alias="codex-account-d@example.com")}
 
@@ -491,12 +491,24 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].get("logical_type"), "auth_account_added")
-        self.assertEqual(text, "Proxy account added\n\n- codex-account-d@example.com")
+        self.assertEqual(text, "Codex account added\n\n- codex-account-d@example.com")
         self.assertNotIn("Account:", text)
         self.assertNotIn("Added to:", text)
         self.assertNotIn("---", text)
 
-    def test_two_proxy_account_adds_group_into_one_plural_message(self):
+    def test_antigravity_account_added_renders_exact_operator_template(self):
+        old = {}
+        new = {"auth:ag-account@example.com": auth_record(alias="ag-account@example.com", account_type="antigravity")}
+
+        events = build_change_events(old, new)
+        text = format_change_event(events[0])
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].get("logical_type"), "auth_account_added")
+        self.assertEqual(text, "Antigravity account added\n\n- ag-account@example.com")
+        self.assertNotIn("Proxy account", text)
+
+    def test_two_codex_account_adds_group_into_one_message(self):
         old = {}
         new = {
             "auth:codex-account-b@example.com": auth_record(alias="codex-account-b@example.com"),
@@ -507,14 +519,15 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
         self.assertEqual(sent, 1)
         self.assertEqual(messages, [
-            "Proxy accounts added\n\n"
+            "Codex account added\n\n"
             "- codex-account-a@example.com\n"
             "- codex-account-b@example.com"
         ])
-        self.assertNotIn("Proxy account added\n\nProxy account added", "\n".join(messages))
+        self.assertNotIn("Codex account added\n\nCodex account added", "\n".join(messages))
+        self.assertNotIn("Proxy account", messages[0])
         self.assertNotIn("Account:", messages[0])
 
-    def test_two_proxy_account_removals_group_into_one_plural_message(self):
+    def test_two_codex_account_removals_group_into_one_message(self):
         old = {
             "auth:codex-account-b@example.com": auth_record(alias="codex-account-b@example.com"),
             "auth:codex-account-a@example.com": auth_record(alias="codex-account-a@example.com"),
@@ -525,13 +538,29 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
         self.assertEqual(sent, 1)
         self.assertEqual(messages, [
-            "Proxy accounts removed\n\n"
+            "Codex account removed\n\n"
             "- codex-account-a@example.com\n"
             "- codex-account-b@example.com"
         ])
+        self.assertNotIn("Proxy account", messages[0])
         self.assertNotIn("Account:", messages[0])
 
-    def test_proxy_account_group_does_not_truncate_large_batches(self):
+    def test_mixed_provider_account_adds_group_by_provider(self):
+        old = {}
+        new = {
+            "auth:codex-user@example.com": auth_record(alias="codex-user@example.com", account_type="codex"),
+            "auth:ag-user@example.com": auth_record(alias="ag-user@example.com", account_type="antigravity"),
+        }
+
+        sent, messages = collect_notification(old, new)
+
+        self.assertEqual(sent, 2)
+        self.assertEqual(messages, [
+            "Antigravity account added\n\n- ag-user@example.com",
+            "Codex account added\n\n- codex-user@example.com",
+        ])
+
+    def test_codex_account_group_does_not_truncate_large_batches(self):
         old = {}
         new = {
             f"auth:codex-batch-{index:02d}@example.com": auth_record(alias=f"codex-batch-{index:02d}@example.com")
@@ -542,14 +571,14 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
         self.assertEqual(sent, 1)
         self.assertEqual(len(messages), 1)
-        self.assertTrue(messages[0].startswith("Proxy accounts added\n\n"))
+        self.assertTrue(messages[0].startswith("Codex account added\n\n"))
         for index in range(25):
             self.assertIn(f"- codex-batch-{index:02d}@example.com", messages[0])
         self.assertEqual(messages[0].count("\n- "), 25)
         self.assertNotIn("... and", messages[0])
         self.assertNotIn("Change notification summary", messages[0])
 
-    def test_proxy_account_added_prefers_codex_label_when_plain_label_exists(self):
+    def test_codex_account_added_prefers_codex_label_when_plain_label_exists(self):
         old = {}
         new = {
             "auth:codex-account-c@example.com.json": auth_record(alias="account-c@example.com"),
@@ -558,7 +587,7 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         sent, messages = collect_notification(old, new)
 
         self.assertEqual(sent, 1)
-        self.assertEqual(messages, ["Proxy account added\n\n- codex-account-c@example.com"])
+        self.assertEqual(messages, ["Codex account added\n\n- codex-account-c@example.com"])
         self.assertNotIn("- account-c@example.com", messages[0])
 
     def test_api_key_adds_are_not_grouped_as_proxy_accounts(self):

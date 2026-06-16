@@ -264,6 +264,25 @@ def safe_proxy_account_label(event):
     return account
 
 
+def proxy_account_provider_label(event):
+    event = event or {}
+    evidence = event.get("evidence") if isinstance(event.get("evidence"), dict) else {}
+    account_type = str(evidence.get("account_type") or "").strip().lower()
+    if not account_type:
+        for change in event.get("changes") or []:
+            text = str(change or "").strip()
+            if text.lower().startswith("type: "):
+                account_type = text.split(":", 1)[1].strip().lower()
+                break
+    if account_type == "codex":
+        return "Codex"
+    if account_type == "antigravity":
+        return "Antigravity"
+    if is_codex_account_label(event.get("account")) or is_codex_account_label(event.get("key")):
+        return "Codex"
+    return "Proxy"
+
+
 def format_change_value(value):
     return format_limit_for_reply(value)
 
@@ -603,6 +622,7 @@ def build_change_events(old_snapshot: dict[str, dict[str, Any]], new_snapshot: d
                 "Proxy account added",
                 change_watch_label(key, record),
                 changes,
+                evidence={"account_type": account_type} if account_type else None,
             ))
             continue
         if api_key_logically_present(record):
@@ -623,7 +643,10 @@ def build_change_events(old_snapshot: dict[str, dict[str, Any]], new_snapshot: d
                 "auth_account_removed",
                 "Proxy account removed",
                 change_watch_label(key, old),
-                evidence={"removed_from": ["auth files"]},
+                evidence={
+                    "account_type": str(old.get("type") or "").strip(),
+                    "removed_from": ["auth files"],
+                },
             ))
             continue
         if api_key_logically_present(old):
@@ -779,9 +802,9 @@ def logical_type_for_event(event):
         return "quota_changed"
     if any(change.startswith("Alias: ") for change in changes):
         return "alias_changed"
-    if title == "Proxy account added":
+    if title in {"Proxy account added", "Codex account added", "Antigravity account added"}:
         return "auth_account_added"
-    if title == "Proxy account removed":
+    if title in {"Proxy account removed", "Codex account removed", "Antigravity account removed"}:
         return "auth_account_removed"
     if title == "Proxy account changed":
         return "auth_account_changed"
@@ -872,9 +895,9 @@ def format_change_event(event):
 def format_proxy_account_group(logical_type, events):
     action = "removed" if logical_type == "auth_account_removed" else "added"
     labels = [safe_proxy_account_label(event) for event in events]
-    noun = "account" if len(labels) == 1 else "accounts"
+    provider = proxy_account_provider_label(events[0] if events else {})
     lines = [
-        f"Proxy {noun} {action}",
+        f"{provider} account {action}",
         "",
     ]
     lines.extend(f"- {label}" for label in labels)
@@ -1120,10 +1143,11 @@ def flush_pending_change_notifications(watch: dict[str, Any], dry_run: bool = Fa
     for key, event in matured:
         logical_type = logical_type_for_event(event)
         if logical_type in {"auth_account_added", "auth_account_removed"}:
-            if logical_type not in auth_groups:
-                auth_groups[logical_type] = []
-                auth_group_order.append(logical_type)
-            auth_groups[logical_type].append((key, event))
+            group_key = (logical_type, proxy_account_provider_label(event))
+            if group_key not in auth_groups:
+                auth_groups[group_key] = []
+                auth_group_order.append(group_key)
+            auth_groups[group_key].append((key, event))
         elif logical_type in {"key_manually_disabled", "key_manually_enabled"}:
             if logical_type not in manual_key_groups:
                 manual_key_groups[logical_type] = []
@@ -1135,8 +1159,9 @@ def flush_pending_change_notifications(watch: dict[str, Any], dry_run: bool = Fa
     detailed = remaining[:DETAILED_CHANGE_NOTIFICATION_LIMIT]
     overflow = remaining[DETAILED_CHANGE_NOTIFICATION_LIMIT:]
     sent = 0
-    for logical_type in auth_group_order:
-        group = auth_groups.get(logical_type, [])
+    for group_key in auth_group_order:
+        logical_type = group_key[0]
+        group = auth_groups.get(group_key, [])
         if not group:
             continue
         if send_telegram(format_proxy_account_group(logical_type, [event for _, event in group]), dry_run=dry_run):
