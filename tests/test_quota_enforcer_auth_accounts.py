@@ -694,7 +694,8 @@ class AuthQuotaEnforcerTests(unittest.TestCase):
              mock.patch.object(self.module, "load_quota_config", return_value=cfg), \
              mock.patch.object(self.module, "sync_quota_config_with_config_keys") as sync_mock, \
              mock.patch.object(self.module, "get_usage_by_key", return_value=usage) as usage_mock, \
-             mock.patch.object(self.module, "save_disabled_state", return_value=state) as save_disabled_mock, \
+             mock.patch.object(self.module, "load_quota_state", return_value=state), \
+             mock.patch.object(self.module, "save_quota_state") as save_state_mock, \
              mock.patch.object(self.module, "update_config_api_keys") as update_config_mock, \
              mock.patch.object(self.module, "management_request", side_effect=AssertionError("auth quota management should be skipped")), \
              mock.patch.object(self.module, "now_ts", return_value=200):
@@ -704,7 +705,8 @@ class AuthQuotaEnforcerTests(unittest.TestCase):
 
         sync_mock.assert_called_once_with(cfg)
         usage_mock.assert_called_once_with(cfg["keys"], "UTC")
-        save_disabled_mock.assert_called_once_with(["test-key"])
+        self.assertGreaterEqual(save_state_mock.call_count, 1)
+        self.assertEqual(save_state_mock.call_args_list[0].args[0].get("disabled_by_quota"), ["test-key"])
         update_config_mock.assert_called_once_with([], ["test-key"], False)
 
     def run_migration(self, auth_dir, backup_dir, auth_files, quota_by_index, state=None, ts=100):

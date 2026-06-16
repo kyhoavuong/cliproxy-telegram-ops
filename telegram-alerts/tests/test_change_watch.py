@@ -426,6 +426,24 @@ class CpaRegistrySyncTests(unittest.TestCase):
         self.assertEqual([account["key"] for account in picker_accounts], ["test-key-protected"])
         self.assertEqual(usage_count, 1)
 
+    def test_active_proxy_quota_managed_deleted_cpa_row_is_reactivated(self):
+        changed, rows, alias_map, picker_accounts, usage_count = self.run_sync(
+            quota_keys=[{"name": "Active Alias", "key": "test-key-active", "daily_token_limit": 1000}],
+            proxy_keys=["test-key-active"],
+            existing_rows=[{"api_key": "test-key-active", "alias": "Old Alias", "display_key": "old-display", "is_deleted": 1}],
+            usage_rows=[("test-key-active", 123)],
+        )
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["is_deleted"], 0)
+        self.assertEqual(rows[0]["key_alias"], "Active Alias")
+        self.assertNotEqual(rows[0]["display_key"], "old-display")
+        self.assertIn("test-key-active", alias_map)
+        self.assertEqual(alias_map["test-key-active"], "Active Alias")
+        self.assertEqual([account["key"] for account in picker_accounts], ["test-key-active"])
+        self.assertEqual(usage_count, 1)
+
     def test_quota_sync_preserves_soft_deleted_cpa_row_as_manual_delete_evidence(self):
         changed, rows, alias_map, picker_accounts, usage_count = self.run_sync(
             quota_keys=[{"name": "Quota Alias", "key": "test-key-restore", "daily_token_limit": 1000}],
@@ -466,10 +484,34 @@ class CpaRegistrySyncTests(unittest.TestCase):
         self.assertIn("CPA", logged)
         self.assertNotIn("test-key-unreadable", logged)
 
+    def test_skips_soft_delete_when_proxy_config_has_no_api_keys_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db_path = tmp_path / "app.db"
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            create_usage_db(db_path)
+            write_quota_file(quota_path, [])
+            config_path.write_text("server: true\n", encoding="utf-8")
+            insert_cpa_key(db_path, api_key="test-key-no-block", alias="No Block", display_key="old-display", is_deleted=0)
+
+            with mock.patch.object(quota_config, "USAGE_DB", db_path), \
+                 mock.patch.object(quota_config, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(quota_config, "log") as log_mock:
+                changed = quota_config.sync_cpa_registry_from_quotas()
+                rows = fetch_cpa_rows(db_path)
+
+        self.assertEqual(changed, 0)
+        self.assertEqual(rows[0]["is_deleted"], 0)
+        logged = "\n".join(str(call.args[0]) for call in log_mock.call_args_list if call.args)
+        self.assertIn("api-keys block unavailable", logged)
+        self.assertNotIn("test-key-no-block", logged)
+
 
 class ChangeWatchNotificationTests(unittest.TestCase):
     def test_codex_account_removed_renders_exact_operator_template(self):
-        old = {"auth:codex-account-d@example.com": auth_record(alias="codex-account-d@example.com")}
+        old = {"auth:codex-nothing2k05@gmail.com": auth_record(alias="codex-nothing2k05@gmail.com")}
         new = {}
 
         events = build_change_events(old, new)
@@ -477,42 +519,42 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].get("logical_type"), "auth_account_removed")
-        self.assertEqual(text, "Codex account removed\n\n- codex-account-d@example.com")
+        self.assertEqual(text, "Codex account removed\n\n- codex-nothing2k05@gmail.com")
         self.assertNotIn("Account:", text)
         self.assertNotIn("Removed from:", text)
         self.assertNotIn("---", text)
 
     def test_codex_account_added_renders_exact_operator_template(self):
         old = {}
-        new = {"auth:codex-account-d@example.com": auth_record(alias="codex-account-d@example.com")}
+        new = {"auth:codex-nothing2k05@gmail.com": auth_record(alias="codex-nothing2k05@gmail.com")}
 
         events = build_change_events(old, new)
         text = format_change_event(events[0])
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].get("logical_type"), "auth_account_added")
-        self.assertEqual(text, "Codex account added\n\n- codex-account-d@example.com")
+        self.assertEqual(text, "Codex account added\n\n- codex-nothing2k05@gmail.com")
         self.assertNotIn("Account:", text)
         self.assertNotIn("Added to:", text)
         self.assertNotIn("---", text)
 
     def test_antigravity_account_added_renders_exact_operator_template(self):
         old = {}
-        new = {"auth:ag-account@example.com": auth_record(alias="ag-account@example.com", account_type="antigravity")}
+        new = {"auth:huyluongnguyentkvn@gmail.com": auth_record(alias="huyluongnguyentkvn@gmail.com", account_type="antigravity")}
 
         events = build_change_events(old, new)
         text = format_change_event(events[0])
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].get("logical_type"), "auth_account_added")
-        self.assertEqual(text, "Antigravity account added\n\n- ag-account@example.com")
+        self.assertEqual(text, "Antigravity account added\n\n- huyluongnguyentkvn@gmail.com")
         self.assertNotIn("Proxy account", text)
 
     def test_two_codex_account_adds_group_into_one_message(self):
         old = {}
         new = {
-            "auth:codex-account-b@example.com": auth_record(alias="codex-account-b@example.com"),
-            "auth:codex-account-a@example.com": auth_record(alias="codex-account-a@example.com"),
+            "auth:codex-huynhlehaiduong1234@gmail.com": auth_record(alias="codex-huynhlehaiduong1234@gmail.com"),
+            "auth:codex-bachdatcuber@gmail.com": auth_record(alias="codex-bachdatcuber@gmail.com"),
         }
 
         sent, messages = collect_notification(old, new)
@@ -520,8 +562,8 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         self.assertEqual(sent, 1)
         self.assertEqual(messages, [
             "Codex account added\n\n"
-            "- codex-account-a@example.com\n"
-            "- codex-account-b@example.com"
+            "- codex-bachdatcuber@gmail.com\n"
+            "- codex-huynhlehaiduong1234@gmail.com"
         ])
         self.assertNotIn("Codex account added\n\nCodex account added", "\n".join(messages))
         self.assertNotIn("Proxy account", messages[0])
@@ -529,8 +571,8 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
     def test_two_codex_account_removals_group_into_one_message(self):
         old = {
-            "auth:codex-account-b@example.com": auth_record(alias="codex-account-b@example.com"),
-            "auth:codex-account-a@example.com": auth_record(alias="codex-account-a@example.com"),
+            "auth:codex-huynhlehaiduong1234@gmail.com": auth_record(alias="codex-huynhlehaiduong1234@gmail.com"),
+            "auth:codex-bachdatcuber@gmail.com": auth_record(alias="codex-bachdatcuber@gmail.com"),
         }
         new = {}
 
@@ -539,8 +581,8 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         self.assertEqual(sent, 1)
         self.assertEqual(messages, [
             "Codex account removed\n\n"
-            "- codex-account-a@example.com\n"
-            "- codex-account-b@example.com"
+            "- codex-bachdatcuber@gmail.com\n"
+            "- codex-huynhlehaiduong1234@gmail.com"
         ])
         self.assertNotIn("Proxy account", messages[0])
         self.assertNotIn("Account:", messages[0])
@@ -548,16 +590,16 @@ class ChangeWatchNotificationTests(unittest.TestCase):
     def test_mixed_provider_account_adds_group_by_provider(self):
         old = {}
         new = {
-            "auth:codex-user@example.com": auth_record(alias="codex-user@example.com", account_type="codex"),
-            "auth:ag-user@example.com": auth_record(alias="ag-user@example.com", account_type="antigravity"),
+            "auth:codex-user@gmail.com": auth_record(alias="codex-user@gmail.com", account_type="codex"),
+            "auth:ag-user@gmail.com": auth_record(alias="ag-user@gmail.com", account_type="antigravity"),
         }
 
         sent, messages = collect_notification(old, new)
 
         self.assertEqual(sent, 2)
         self.assertEqual(messages, [
-            "Antigravity account added\n\n- ag-user@example.com",
-            "Codex account added\n\n- codex-user@example.com",
+            "Antigravity account added\n\n- ag-user@gmail.com",
+            "Codex account added\n\n- codex-user@gmail.com",
         ])
 
     def test_codex_account_group_does_not_truncate_large_batches(self):
@@ -581,14 +623,14 @@ class ChangeWatchNotificationTests(unittest.TestCase):
     def test_codex_account_added_prefers_codex_label_when_plain_label_exists(self):
         old = {}
         new = {
-            "auth:codex-account-c@example.com.json": auth_record(alias="account-c@example.com"),
+            "auth:codex-joshua27654037@gmail.com.json": auth_record(alias="joshua27654037@gmail.com"),
         }
 
         sent, messages = collect_notification(old, new)
 
         self.assertEqual(sent, 1)
-        self.assertEqual(messages, ["Codex account added\n\n- codex-account-c@example.com"])
-        self.assertNotIn("- account-c@example.com", messages[0])
+        self.assertEqual(messages, ["Codex account added\n\n- codex-joshua27654037@gmail.com"])
+        self.assertNotIn("- joshua27654037@gmail.com", messages[0])
 
     def test_api_key_adds_are_not_grouped_as_proxy_accounts(self):
         old = {}
@@ -1653,7 +1695,7 @@ class ChangeWatchNotificationTests(unittest.TestCase):
     def test_quota_restore_with_limit_increase_emits_only_quota_update(self):
         disabled = {
             "key-1": api_record(
-                alias="exampleuser",
+                alias="vutuanhung",
                 cpa_deleted=False,
                 in_quota=True,
                 in_proxy_config=False,
@@ -1664,7 +1706,7 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         }
         active = {
             "key-1": api_record(
-                alias="exampleuser",
+                alias="vutuanhung",
                 cpa_deleted=False,
                 in_quota=True,
                 in_proxy_config=True,
@@ -1677,13 +1719,13 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         sent, messages = collect_notification(disabled, active)
 
         self.assertEqual(sent, 1)
-        self.assertEqual(messages, ["Quota updated\n\nUser: exampleuser\nDaily: 200.0M -> 300.0M"])
+        self.assertEqual(messages, ["Quota updated\n\nUser: vutuanhung\nDaily: 200.0M -> 300.0M"])
         self.assertNotIn("API key created", "\n".join(messages))
 
     def test_quota_update_while_quota_disabled_emits_only_quota_update(self):
         disabled_before = {
             "key-1": api_record(
-                alias="exampleuser",
+                alias="vutuanhung",
                 cpa_deleted=False,
                 in_quota=True,
                 in_proxy_config=False,
@@ -1694,7 +1736,7 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         }
         disabled_after = {
             "key-1": api_record(
-                alias="exampleuser",
+                alias="vutuanhung",
                 cpa_deleted=False,
                 in_quota=True,
                 in_proxy_config=False,
@@ -1707,11 +1749,11 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         sent, messages = collect_notification(disabled_before, disabled_after)
 
         self.assertEqual(sent, 1)
-        self.assertEqual(messages, ["Quota updated\n\nUser: exampleuser\nDaily: 200.0M -> 300.0M"])
+        self.assertEqual(messages, ["Quota updated\n\nUser: vutuanhung\nDaily: 200.0M -> 300.0M"])
         self.assertNotIn("API key created", "\n".join(messages))
 
     def test_silent_quota_disabled_snapshot_returns_changed_so_state_is_saved(self):
-        disabled = {"key-1": api_record(alias="exampleuser", in_proxy_config=False, disabled_by_quota=True)}
+        disabled = {"key-1": api_record(alias="vutuanhung", in_proxy_config=False, disabled_by_quota=True)}
         state = {
             "change_watch": {
                 "snapshot": {},
@@ -1739,6 +1781,66 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
         self.assertEqual(sent, 0)
         self.assertEqual(messages, [])
+
+    def test_manual_delete_after_protected_restore_emits_removed_notification(self):
+        active = {
+            "key-1": api_record(
+                alias="alice",
+                cpa_deleted=True,
+                in_quota=True,
+                in_proxy_config=True,
+                disabled_by_quota=False,
+            ) | {"cpa_deleted_while_quota_disabled": True}
+        }
+        removed = {"key-1": api_record(alias="alice", cpa_deleted=True, in_quota=False, in_proxy_config=False, disabled_by_quota=False)}
+
+        sent, messages = collect_notification(active, removed, now=20)
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(messages, ["API key deleted\n\nUser: alice\nStatus: Removed"])
+
+    def test_known_active_manual_delete_after_protected_restore_emits_removed_notification(self):
+        removed = {
+            "key-1": api_record(
+                alias="alice",
+                cpa_deleted=True,
+                in_quota=False,
+                in_proxy_config=False,
+                disabled_by_quota=False,
+                daily=None,
+            ) | {"cpa_deleted_while_quota_disabled": True}
+        }
+        state = {
+            "change_watch": {
+                "snapshot": {},
+                "fingerprint": change_watch.change_watch_fingerprint({}),
+                "checked_at": 0,
+                "known_active_keys": {
+                    "key-1": {"account": "alice", "last_seen": 0, "last_present": 0},
+                },
+                "quota_disabled_cpa_tombstones": {
+                    "key-1": {"account": "alice", "last_seen": 1, "expires_at": 100},
+                },
+            }
+        }
+        sent_messages = []
+
+        with mock.patch.object(change_watch, "change_watch_snapshot", return_value=removed), \
+             mock.patch.object(change_watch, "CHANGE_WATCH_INTERVAL_SECONDS", 1), \
+             mock.patch.object(change_watch, "CHANGE_NOTIFICATION_DEBOUNCE_SECONDS", 3), \
+             mock.patch.object(change_watch, "CHANGE_REMOVAL_DEBOUNCE_SECONDS", 8), \
+             mock.patch.object(change_watch, "REMOVAL_HOLDBACK_SECONDS", 10), \
+             mock.patch.object(change_watch, "now_ts", return_value=10), \
+             mock.patch.object(change_watch, "send_telegram", side_effect=lambda text, dry_run=False, **kwargs: sent_messages.append(text) or True):
+            process_change_notifications(state, force=True)
+        with mock.patch.object(change_watch, "CHANGE_NOTIFICATION_DEBOUNCE_SECONDS", 3), \
+             mock.patch.object(change_watch, "CHANGE_REMOVAL_DEBOUNCE_SECONDS", 8), \
+             mock.patch.object(change_watch, "REMOVAL_HOLDBACK_SECONDS", 10), \
+             mock.patch.object(change_watch, "now_ts", return_value=30), \
+             mock.patch.object(change_watch, "send_telegram", side_effect=lambda text, dry_run=False, **kwargs: sent_messages.append(text) or True):
+            flush_pending_change_notifications(state["change_watch"])
+
+        self.assertEqual(sent_messages, ["API key deleted\n\nUser: alice\nStatus: Removed"])
 
     def test_manual_delete_after_quota_disabled_state_emits_removed_notification(self):
         disabled = {"key-1": api_record(alias="alice", cpa_deleted=False, in_quota=True, in_proxy_config=False, disabled_by_quota=True)}

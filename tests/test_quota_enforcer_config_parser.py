@@ -23,6 +23,42 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
     def setUpClass(cls):
         cls.module = load_quota_enforcer_module()
 
+    def setUp(self):
+        real_quota_config = self.module.BASE_DIR / "quota-enforcer" / "quotas.json"
+        real_state_file = self.module.BASE_DIR / "quota-enforcer" / "state.json"
+        real_proxy_config = self.module.BASE_DIR / "config" / "config.yaml"
+        original_save_quota_config = self.module.save_quota_config
+        original_save_quota_state = self.module.save_quota_state
+        original_write_config_preserve_inode = self.module.write_config_preserve_inode
+        runtime_guard_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(runtime_guard_tmp.cleanup)
+        guarded_usage_db = Path(runtime_guard_tmp.name) / "missing-app.db"
+
+        def guarded_save_quota_config(cfg):
+            if Path(self.module.QUOTA_CONFIG) == real_quota_config:
+                raise AssertionError("test attempted to write real quota-enforcer/quotas.json")
+            return original_save_quota_config(cfg)
+
+        def guarded_save_quota_state(state):
+            if Path(self.module.STATE_FILE) == real_state_file:
+                raise AssertionError("test attempted to write real quota-enforcer/state.json")
+            return original_save_quota_state(state)
+
+        def guarded_write_config(path, content):
+            if Path(path) == real_proxy_config:
+                raise AssertionError("test attempted to write real config/config.yaml")
+            return original_write_config_preserve_inode(path, content)
+
+        patchers = [
+            mock.patch.object(self.module, "USAGE_DB", guarded_usage_db),
+            mock.patch.object(self.module, "save_quota_config", side_effect=guarded_save_quota_config),
+            mock.patch.object(self.module, "save_quota_state", side_effect=guarded_save_quota_state),
+            mock.patch.object(self.module, "write_config_preserve_inode", side_effect=guarded_write_config),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def write_quota_file(self, path, keys):
         path.write_text(
             json.dumps({"timezone": "UTC", "dry_run": False, "keys": keys}, indent=2) + "\n",
@@ -89,6 +125,58 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
 
         self.assertEqual([item["name"] for item in saved["keys"]], ["Quota Disabled"])
         self.assertEqual([item["key"] for item in saved["keys"]], ["quota-disabled-key"])
+
+    def test_sync_does_not_create_unlimited_quota_rows_from_proxy_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            state_path = tmp_path / "state.json"
+            self.write_quota_file(quota_path, [{"name": "Managed", "key": "managed-key", "daily_token_limit": 100}])
+            config_path.write_text("api-keys:\n  - \"managed-key\"\n  - \"config-only-key\"\n", encoding="utf-8")
+            state_path.write_text(json.dumps({"disabled_by_quota": []}), encoding="utf-8")
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(self.module, "STATE_FILE", state_path):
+                cfg = self.module.load_quota_config()
+                self.module.sync_quota_config_with_config_keys(cfg)
+                saved = json.loads(quota_path.read_text(encoding="utf-8"))
+
+        self.assertEqual([item["key"] for item in saved["keys"]], ["managed-key"])
+        self.assertEqual(saved["keys"][0]["daily_token_limit"], 100)
+
+    def test_empty_quotas_with_non_empty_proxy_config_does_not_recreate_unlimited_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            state_path = tmp_path / "state.json"
+            lock_path = tmp_path / "quota.lock"
+            self.write_quota_file(quota_path, [])
+            config_path.write_text("api-keys:\n  - \"config-only-key\"\n", encoding="utf-8")
+            state_path.write_text(json.dumps({"disabled_by_quota": []}), encoding="utf-8")
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(self.module, "STATE_FILE", state_path), \
+                 mock.patch.object(self.module, "LOCK_FILE", lock_path), \
+                 mock.patch.object(self.module, "CLIPROXY_MANAGEMENT_TOKEN", ""), \
+                 mock.patch.object(self.module, "get_usage_by_key", return_value={}), \
+                 mock.patch.object(self.module, "sys") as sys_mock:
+                sys_mock.argv = ["quota_enforcer.py"]
+                self.assertEqual(self.module.main(), 0)
+                saved = json.loads(quota_path.read_text(encoding="utf-8"))
+                _, _, _, config_keys = self.module.parse_api_keys_block(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["keys"], [])
+        self.assertEqual(config_keys, ["config-only-key"])
+
+    def test_runtime_write_guards_block_unpatched_quota_config_writes(self):
+        cfg = {"timezone": "UTC", "dry_run": False, "keys": []}
+
+        with self.assertRaisesRegex(AssertionError, "real quota-enforcer/quotas.json"):
+            self.module.save_quota_config(cfg)
 
     def test_main_keeps_over_daily_key_absent_from_config_and_marks_disabled_by_quota(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,7 +257,7 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
         self.assertEqual([item["key"] for item in saved["keys"]], ["manual-disabled-key"])
         self.assertEqual(state.get("manually_disabled_keys"), ["manual-disabled-key"])
 
-    def test_cpa_deleted_prune_ignores_stale_manual_marker_when_key_is_active_in_proxy(self):
+    def test_cpa_deleted_prune_preserves_active_proxy_key_with_stale_cpa_delete(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             quota_path = tmp_path / "quotas.json"
@@ -190,8 +278,8 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
                 )
                 saved = json.loads(quota_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(removed, {"stale-active-key"})
-        self.assertEqual(saved["keys"], [])
+        self.assertEqual(removed, set())
+        self.assertEqual([item["key"] for item in saved["keys"]], ["stale-active-key"])
         self.assertEqual(state.get("manually_disabled_keys"), ["stale-active-key"])
 
     def test_over_weekly_key_is_disabled_and_kept_in_quotas(self):
@@ -308,7 +396,7 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
                 {"name": "Deleted", "key": "deleted-key", "daily_token_limit": 100},
                 {"name": "Kept", "key": "kept-key", "daily_token_limit": 100},
             ])
-            config_path.write_text("api-keys:\n  - \"deleted-key\"\n  - \"kept-key\"\n", encoding="utf-8")
+            config_path.write_text("api-keys:\n  - \"kept-key\"\n", encoding="utf-8")
             state_path.write_text(json.dumps({"disabled_by_quota": []}), encoding="utf-8")
             self.write_cpa_db(usage_db, [("deleted-key", 1), ("kept-key", 0)])
 
@@ -441,7 +529,109 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
         self.assertEqual(state.get("cpa_deleted_while_quota_disabled"), ["reset-restored-key"])
         self.assertEqual(config_keys, ["reset-restored-key"])
 
-    def test_active_cpa_delete_without_protection_still_prunes_key(self):
+    def test_cpa_tombstone_created_between_disabled_run_and_daily_reset_is_protected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            state_path = tmp_path / "state.json"
+            usage_db = tmp_path / "app.db"
+            lock_path = tmp_path / "quota.lock"
+            self.write_quota_file(quota_path, [{"name": "Late Tombstone", "key": "late-tombstone-key", "daily_token_limit": 100}])
+            config_path.write_text("api-keys: []\n", encoding="utf-8")
+            state_path.write_text(json.dumps({"disabled_by_quota": ["late-tombstone-key"]}), encoding="utf-8")
+            self.write_cpa_db(usage_db, [("late-tombstone-key", 1)])
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(self.module, "STATE_FILE", state_path), \
+                 mock.patch.object(self.module, "USAGE_DB", usage_db), \
+                 mock.patch.object(self.module, "LOCK_FILE", lock_path), \
+                 mock.patch.object(self.module, "CLIPROXY_MANAGEMENT_TOKEN", ""), \
+                 mock.patch.object(self.module, "get_usage_by_key", return_value={"late-tombstone-key": {"today_tokens": 0, "week_tokens": 0, "requests_today": 0}}), \
+                 mock.patch.object(self.module, "sys") as sys_mock:
+                sys_mock.argv = ["quota_enforcer.py"]
+                self.assertEqual(self.module.main(), 0)
+                saved = json.loads(quota_path.read_text(encoding="utf-8"))
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                _, _, _, config_keys = self.module.parse_api_keys_block(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual([item["key"] for item in saved["keys"]], ["late-tombstone-key"])
+        self.assertEqual(state.get("disabled_by_quota"), [])
+        self.assertEqual(state.get("cpa_deleted_while_quota_disabled"), ["late-tombstone-key"])
+        self.assertEqual(config_keys, ["late-tombstone-key"])
+
+    def test_reset_tombstone_is_saved_before_config_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            state_path = tmp_path / "state.json"
+            usage_db = tmp_path / "app.db"
+            lock_path = tmp_path / "quota.lock"
+            self.write_quota_file(quota_path, [{"name": "Interrupted Restore", "key": "interrupted-restore-key", "daily_token_limit": 100}])
+            config_path.write_text("api-keys: []\n", encoding="utf-8")
+            state_path.write_text(json.dumps({"disabled_by_quota": ["interrupted-restore-key"]}), encoding="utf-8")
+            self.write_cpa_db(usage_db, [("interrupted-restore-key", 1)])
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(self.module, "STATE_FILE", state_path), \
+                 mock.patch.object(self.module, "USAGE_DB", usage_db), \
+                 mock.patch.object(self.module, "LOCK_FILE", lock_path), \
+                 mock.patch.object(self.module, "CLIPROXY_MANAGEMENT_TOKEN", ""), \
+                 mock.patch.object(self.module, "get_usage_by_key", return_value={"interrupted-restore-key": {"today_tokens": 0, "week_tokens": 0, "requests_today": 0}}), \
+                 mock.patch.object(self.module, "update_config_api_keys", side_effect=RuntimeError("stop before config restore")), \
+                 mock.patch.object(self.module, "sys") as sys_mock:
+                sys_mock.argv = ["quota_enforcer.py"]
+                with self.assertRaisesRegex(RuntimeError, "stop before config restore"):
+                    self.module.main()
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                _, _, _, config_keys = self.module.parse_api_keys_block(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(state.get("disabled_by_quota"), [])
+        self.assertEqual(state.get("cpa_deleted_while_quota_disabled"), ["interrupted-restore-key"])
+        self.assertEqual(state.get("cpa_deleted_restore_pending"), ["interrupted-restore-key"])
+        self.assertEqual(config_keys, [])
+
+    def test_pending_reset_tombstone_survives_next_run_and_restores_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            state_path = tmp_path / "state.json"
+            usage_db = tmp_path / "app.db"
+            lock_path = tmp_path / "quota.lock"
+            self.write_quota_file(quota_path, [{"name": "Pending Restore", "key": "pending-restore-key", "daily_token_limit": 100}])
+            config_path.write_text("api-keys: []\n", encoding="utf-8")
+            state_path.write_text(json.dumps({
+                "disabled_by_quota": [],
+                "cpa_deleted_while_quota_disabled": ["pending-restore-key"],
+                "cpa_deleted_restore_pending": ["pending-restore-key"],
+            }), encoding="utf-8")
+            self.write_cpa_db(usage_db, [("pending-restore-key", 1)])
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(self.module, "STATE_FILE", state_path), \
+                 mock.patch.object(self.module, "USAGE_DB", usage_db), \
+                 mock.patch.object(self.module, "LOCK_FILE", lock_path), \
+                 mock.patch.object(self.module, "CLIPROXY_MANAGEMENT_TOKEN", ""), \
+                 mock.patch.object(self.module, "get_usage_by_key", return_value={"pending-restore-key": {"today_tokens": 0, "week_tokens": 0, "requests_today": 0}}), \
+                 mock.patch.object(self.module, "sys") as sys_mock:
+                sys_mock.argv = ["quota_enforcer.py"]
+                self.assertEqual(self.module.main(), 0)
+                saved = json.loads(quota_path.read_text(encoding="utf-8"))
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                _, _, _, config_keys = self.module.parse_api_keys_block(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual([item["key"] for item in saved["keys"]], ["pending-restore-key"])
+        self.assertEqual(state.get("disabled_by_quota"), [])
+        self.assertEqual(state.get("cpa_deleted_while_quota_disabled"), ["pending-restore-key"])
+        self.assertNotIn("cpa_deleted_restore_pending", state)
+        self.assertEqual(config_keys, ["pending-restore-key"])
+
+    def test_cpa_delete_absent_from_proxy_config_prunes_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             quota_path = tmp_path / "quotas.json"
@@ -450,7 +640,7 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
             usage_db = tmp_path / "app.db"
             lock_path = tmp_path / "quota.lock"
             self.write_quota_file(quota_path, [{"name": "Active Deleted", "key": "active-deleted-key", "daily_token_limit": 100}])
-            config_path.write_text("api-keys:\n  - \"active-deleted-key\"\n", encoding="utf-8")
+            config_path.write_text("api-keys: []\n", encoding="utf-8")
             state_path.write_text(json.dumps({"disabled_by_quota": []}), encoding="utf-8")
             self.write_cpa_db(usage_db, [("active-deleted-key", 1)])
 
@@ -471,6 +661,90 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
         self.assertEqual(saved["keys"], [])
         self.assertEqual(state.get("disabled_by_quota"), [])
         self.assertNotIn("active-deleted-key", state.get("cpa_deleted_while_quota_disabled", []))
+        self.assertEqual(config_keys, [])
+
+    def test_cpa_delete_preserves_quota_row_when_proxy_config_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            missing_config_path = tmp_path / "missing-config.yaml"
+            cfg = {
+                "keys": [
+                    {"name": "Unreadable Proxy", "key": "unreadable-proxy-key", "daily_token_limit": 100}
+                ]
+            }
+            state = {"disabled_by_quota": []}
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", missing_config_path):
+                removed = self.module.prune_cpa_deleted_quota_items(
+                    cfg,
+                    state,
+                    {"unreadable-proxy-key"},
+                    dry_run=False,
+                    cpa_evidence_reliable=True,
+                )
+
+        self.assertEqual(removed, set())
+        self.assertEqual([item["key"] for item in cfg["keys"]], ["unreadable-proxy-key"])
+
+    def test_cpa_delete_preserves_quota_row_when_proxy_config_has_no_api_keys_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            self.write_quota_file(quota_path, [{"name": "Malformed Proxy", "key": "malformed-proxy-key", "daily_token_limit": 100}])
+            config_path.write_text("server: true\n", encoding="utf-8")
+            state = {"disabled_by_quota": []}
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path):
+                cfg = self.module.load_quota_config()
+                removed = self.module.prune_cpa_deleted_quota_items(
+                    cfg,
+                    state,
+                    {"malformed-proxy-key"},
+                    dry_run=False,
+                    cpa_evidence_reliable=True,
+                )
+                saved = json.loads(quota_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(removed, set())
+        self.assertEqual([item["key"] for item in saved["keys"]], ["malformed-proxy-key"])
+
+    def test_existing_protected_tombstone_does_not_mask_later_manual_delete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            state_path = tmp_path / "state.json"
+            usage_db = tmp_path / "app.db"
+            lock_path = tmp_path / "quota.lock"
+            self.write_quota_file(quota_path, [{"name": "Later Deleted", "key": "later-deleted-key", "daily_token_limit": 100}])
+            config_path.write_text("api-keys: []\n", encoding="utf-8")
+            state_path.write_text(json.dumps({
+                "disabled_by_quota": [],
+                "cpa_deleted_while_quota_disabled": ["later-deleted-key"],
+            }), encoding="utf-8")
+            self.write_cpa_db(usage_db, [("later-deleted-key", 1)])
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(self.module, "STATE_FILE", state_path), \
+                 mock.patch.object(self.module, "USAGE_DB", usage_db), \
+                 mock.patch.object(self.module, "LOCK_FILE", lock_path), \
+                 mock.patch.object(self.module, "CLIPROXY_MANAGEMENT_TOKEN", ""), \
+                 mock.patch.object(self.module, "get_usage_by_key", return_value={"later-deleted-key": {"today_tokens": 0, "week_tokens": 0, "requests_today": 0}}), \
+                 mock.patch.object(self.module, "sys") as sys_mock:
+                sys_mock.argv = ["quota_enforcer.py"]
+                self.assertEqual(self.module.main(), 0)
+                saved = json.loads(quota_path.read_text(encoding="utf-8"))
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                _, _, _, config_keys = self.module.parse_api_keys_block(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["keys"], [])
+        self.assertEqual(state.get("disabled_by_quota"), [])
+        self.assertEqual(state.get("cpa_deleted_while_quota_disabled"), [])
         self.assertEqual(config_keys, [])
 
     def test_protected_cpa_tombstone_clears_after_cpa_row_is_active(self):

@@ -57,6 +57,8 @@ Operator actions use a confirmation step before mutating runtime state. Automati
 
 Manual API-key state is treated as effective only when the manual marker agrees with proxy-config absence. This keeps stale manual markers from producing false Enable picker entries, incorrect Key Status rows, or duplicate manual disable/enable notifications.
 
+Quota-disabled CPA tombstones are treated conservatively during reset recovery: pruning requires reliable proxy-config evidence, and quota-enforcer does not recreate missing quota rows from proxy config alone.
+
 ## Testing Strategy
 
 The repository keeps most behavior testable with Python standard-library tests:

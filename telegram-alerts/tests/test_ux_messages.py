@@ -1753,10 +1753,10 @@ class TelegramUxMessageTests(unittest.TestCase):
             if path.startswith("usage/identities/page"):
                 return 200, {
                     "identities": [
-                        {"identity": "codex-account-a@example.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1},
-                        {"identity": "codex-quota-primary@example.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1},
+                        {"identity": "codex-bachdatcuber@gmail.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1},
+                        {"identity": "codex-chunkystuff04126@gmail.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1},
                         *[
-                            {"identity": f"codex-quota-a{idx}@example.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1}
+                            {"identity": f"codex-quota-a{idx}@gmail.com-plus.json", "type": "codex", "disabled": False, "auth_type": 1}
                             for idx in range(9)
                         ],
                     ]
@@ -1781,14 +1781,14 @@ class TelegramUxMessageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             auth_dir = Path(tmp)
             enabled = [
-                "codex-account-a@example.com",
-                *[f"codex-quota-a{idx}@example.com" for idx in range(9)],
-                "codex-quota-primary@example.com",
+                "codex-bachdatcuber@gmail.com",
+                "codex-chunkystuff04126@gmail.com",
+                *[f"codex-quota-a{idx}@gmail.com" for idx in range(9)],
             ]
             disabled = [
-                *[f"codex-quota-b{idx}@example.com" for idx in range(9)],
-                "codex-quota-secondary@example.com",
-                "codex-quota-tertiary@example.com",
+                "codex-chunkystuff04128@gmail.com",
+                "codex-chunkystuff04130@gmail.com",
+                *[f"codex-quota-b{idx}@gmail.com" for idx in range(9)],
             ]
             for label in enabled:
                 path = auth_dir / f"{label}-plus.json"
@@ -1828,13 +1828,13 @@ class TelegramUxMessageTests(unittest.TestCase):
     def test_quota_management_handles_unavailable_quota_without_crashing_or_leaking_secrets(self):
         with tempfile.TemporaryDirectory() as tmp:
             auth_dir = Path(tmp)
-            (auth_dir / "codex-secret@example.com.json").write_text(json.dumps({"type": "codex", "disabled": False, "token": "sk-secret-value"}), encoding="utf-8")
+            (auth_dir / "codex-secret@example.test.json").write_text(json.dumps({"type": "codex", "disabled": False, "token": "sk-secret-value"}), encoding="utf-8")
             with mock.patch.object(snapshot_module, "AUTH_DIR", auth_dir, create=True), \
                  mock.patch.object(snapshot_module, "auth_management_quota_left_by_ref", return_value={}):
                 text = build_quota_management_reply({"created_at": 100})
 
         self.assertIn("(5h avail: unavailable, weekly avail: unavailable)", text)
-        self.assertNotIn("codex-secret@example.com", text)
+        self.assertNotIn("codex-secret@example.test", text)
         self.assertNotIn("sk-secret", text)
         self.assertNotIn("auth_index", text)
 
@@ -2126,8 +2126,8 @@ class TelegramUxMessageTests(unittest.TestCase):
         payload = {
             "results": [
                 {
-                    "file_name": "codex-account-b@example.com.json",
-                    "name": "codex-account-b@example.com.json",
+                    "file_name": "codex-huynhlehaiduong1234@gmail.com.json",
+                    "name": "codex-huynhlehaiduong1234@gmail.com.json",
                     "type": "codex",
                     "status": "unauthorized_401",
                     "error": "HTTP 401 {\"error\": {\"code\": \"token_revoked\", \"message\": \"Encountered invalidated oauth token for user, failing request bearer ghp_errorbearersecret sk-errorsecret123 cookie=session-cookie-secret api_key=ck-error-api-key management_token=mgmt-error-secret\"}}",
@@ -2149,7 +2149,7 @@ class TelegramUxMessageTests(unittest.TestCase):
             "[CRITICAL] Proxy accounts need reauth",
             "",
             "Evidence: 401 Encountered invalidated oauth token for user, failing request",
-            "- codex-account-b@example.com",
+            "- codex-huynhlehaiduong1234@gmail.com",
             "",
             "Action:",
             "Reauth the listed account(s), then check Health alerts.",
@@ -2162,7 +2162,7 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertNotIn("cookie=session-cookie-secret", text)
         self.assertNotIn("api_key=ck-error-api-key", text)
         self.assertNotIn("management_token=mgmt-error-secret", text)
-        self.assertNotIn("codex-account-b@example.com.json", text)
+        self.assertNotIn("codex-huynhlehaiduong1234@gmail.com.json", text)
         self.assertNotIn("token_revoked", text)
         self.assertNotIn("sk-secret-token-value", text)
         self.assertNotIn("session-cookie-secret", text)
@@ -2197,10 +2197,10 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertNotIn("---", text)
 
     def test_key_create_summary_is_concise_and_hides_backend_targets(self):
-        text = build_key_create_summary("exampleuser", "hung", 100_000_000, "default", "hung-12345678901234567")
+        text = build_key_create_summary("vutuanhung", "hung", 100_000_000, "default", "hung-12345678901234567")
 
         self.assertIn("Pending API key creation", text)
-        self.assertIn("User: exampleuser", text)
+        self.assertIn("User: vutuanhung", text)
         self.assertNotIn("Alias shown in dashboards", text)
         self.assertIn("Key prefix: hung", text)
         self.assertIn("Daily quota: 100.0M", text)
@@ -3940,7 +3940,7 @@ class TelegramUxMessageTests(unittest.TestCase):
                      mock.patch("telegram_alerts.actions.write_config_api_keys") as write_config, \
                      mock.patch("telegram_alerts.actions.load_quotas_json", return_value={"keys": [{"key": key, "name": "alice", "daily_token_limit": 1}]}), \
                      mock.patch("telegram_alerts.actions.save_quotas_json") as save_quotas, \
-                     mock.patch("telegram_alerts.actions.load_json", return_value={"disabled_by_quota": [key] if disabled else [], "manually_disabled_keys": [key], "cpa_deleted_while_quota_disabled": [key]}), \
+                     mock.patch("telegram_alerts.actions.load_json", return_value={"disabled_by_quota": [key] if disabled else [], "manually_disabled_keys": [key], "cpa_deleted_while_quota_disabled": [key], "cpa_deleted_restore_pending": [key]}), \
                      mock.patch("telegram_alerts.actions.save_quota_state_json") as save_state, \
                      mock.patch("telegram_alerts.actions.backup_action_files"), \
                      mock.patch("telegram_alerts.actions.soft_delete_cpa_api_key") as soft_delete, \
@@ -3979,6 +3979,7 @@ class TelegramUxMessageTests(unittest.TestCase):
                 self.assertEqual(saved_state["disabled_by_quota"], [])
                 self.assertEqual(saved_state["manually_disabled_keys"], [])
                 self.assertEqual(saved_state["cpa_deleted_while_quota_disabled"], [])
+                self.assertEqual(saved_state["cpa_deleted_restore_pending"], [])
 
     def test_simple_quota_button_uses_cached_snapshot_not_live_refresh(self):
         state = {"snapshot": {"created_at": 1, "quota_error": "", "quota_rows": []}}

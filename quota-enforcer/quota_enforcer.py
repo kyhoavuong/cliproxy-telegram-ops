@@ -183,6 +183,7 @@ def save_disabled_state(disabled_keys):
 # A stale CPA soft-delete first seen while a key is quota-disabled is not enough
 # manual-delete evidence later; daily/weekly reset clears disabled_by_quota first.
 CPA_DELETED_WHILE_QUOTA_DISABLED_KEY = "cpa_deleted_while_quota_disabled"
+CPA_DELETED_RESTORE_PENDING_KEY = "cpa_deleted_restore_pending"
 
 
 def load_cpa_deleted_keys_with_status():
@@ -234,16 +235,43 @@ def active_manually_disabled_keys(state):
     return {key for key in manually_disabled if key not in proxy_key_set}
 
 
-def prune_cpa_deleted_quota_items(cfg, state, cpa_deleted_keys, dry_run=False, cpa_evidence_reliable=True):
+def prune_cpa_deleted_quota_items(
+    cfg,
+    state,
+    cpa_deleted_keys,
+    dry_run=False,
+    cpa_evidence_reliable=True,
+    fresh_protected_tombstones=None,
+):
     deleted = {str(key or "").strip() for key in (cpa_deleted_keys or []) if str(key or "").strip()}
     disabled_by_quota = quota_state_key_set(state, "disabled_by_quota")
     manually_disabled = active_manually_disabled_keys(state)
+    active_proxy_keys = set()
+    proxy_evidence_reliable = False
+    try:
+        if CLIPROXY_CONFIG.exists():
+            _, start, _, proxy_keys = parse_api_keys_block(CLIPROXY_CONFIG.read_text(encoding="utf-8"))
+            if start is None:
+                log("CPA manual-delete proxy config check unavailable: missing api-keys block")
+            else:
+                active_proxy_keys = {str(key or "").strip() for key in proxy_keys if str(key or "").strip()}
+                proxy_evidence_reliable = True
+    except Exception as exc:
+        log(f"CPA manual-delete proxy config check unavailable: {exc.__class__.__name__}")
     protected_tombstones = quota_state_key_set(state, CPA_DELETED_WHILE_QUOTA_DISABLED_KEY)
+    fresh_protected = {
+        str(key or "").strip()
+        for key in (fresh_protected_tombstones or set())
+        if str(key or "").strip()
+    }
     if cpa_evidence_reliable:
         protected_tombstones = {key for key in protected_tombstones if key in deleted}
     if protected_tombstones or CPA_DELETED_WHILE_QUOTA_DISABLED_KEY in dict_or_empty(state):
         state[CPA_DELETED_WHILE_QUOTA_DISABLED_KEY] = sorted(protected_tombstones)
     if not deleted:
+        return set()
+    if not proxy_evidence_reliable:
+        log("CPA manual-delete sync skipped because proxy config evidence is unavailable")
         return set()
     items = list(cfg.get("keys", []) or [])
     kept = []
@@ -254,6 +282,9 @@ def prune_cpa_deleted_quota_items(cfg, state, cpa_deleted_keys, dry_run=False, c
     for item in items:
         key = str(item.get("key") or "").strip() if isinstance(item, dict) else ""
         if key and key in deleted:
+            if key in active_proxy_keys:
+                kept.append(item)
+                continue
             if key in disabled_by_quota:
                 skipped_disabled.add(key)
                 protected_tombstones.add(key)
@@ -263,7 +294,7 @@ def prune_cpa_deleted_quota_items(cfg, state, cpa_deleted_keys, dry_run=False, c
                 skipped_manual.add(key)
                 kept.append(item)
                 continue
-            if key in protected_tombstones:
+            if key in fresh_protected:
                 skipped_protected.add(key)
                 kept.append(item)
                 continue
@@ -286,6 +317,8 @@ def prune_cpa_deleted_quota_items(cfg, state, cpa_deleted_keys, dry_run=False, c
         if str(key or "").strip() and str(key or "").strip() not in removed
     ]
     state["disabled_by_quota"] = sorted(set(disabled))
+    protected_tombstones = protected_tombstones - removed
+    state[CPA_DELETED_WHILE_QUOTA_DISABLED_KEY] = sorted(protected_tombstones)
     if not dry_run:
         save_quota_config(cfg)
     log(f"CPA manual-delete sync removed_quota_count={len(removed)}")
@@ -296,10 +329,6 @@ def prune_cpa_deleted_quota_items(cfg, state, cpa_deleted_keys, dry_run=False, c
     if skipped_protected:
         log(f"CPA manual-delete sync skipped_protected_stale_cpa_tombstone_count={len(skipped_protected)}")
     return removed
-
-
-def default_key_name(key):
-    return key.split("-", 1)[0] if "-" in key else key[-8:]
 
 
 def now_ts():
@@ -1040,41 +1069,30 @@ def sync_quota_config_with_config_keys(cfg):
         return
 
     config_text = CLIPROXY_CONFIG.read_text(encoding="utf-8")
-    _, _, _, config_keys = parse_api_keys_block(config_text)
+    _, start, _, config_keys = parse_api_keys_block(config_text)
+    if start is None:
+        log("quotas.json sync skipped: proxy config api-keys block unavailable")
+        return
 
-    existing_items = cfg.get("keys", [])
-    new_items = []
-    seen = set()
-    added = 0
-
-    # Keep all existing quota-managed items. Absence from config.yaml is not
-    # manual-delete evidence: quota-disabled keys are intentionally removed from
-    # config.yaml to block traffic, and disabled_by_quota state may be stale.
-    for item in existing_items:
-        key = item.get("key")
-        if not key or key in seen:
-            continue
-        new_items.append(item)
-        seen.add(key)
-
-    # Still adopt newly-present config keys as unmanaged/unlimited quotas.
-    for key in config_keys:
-        if not key or key in seen:
-            continue
-        new_items.append({
-            "name": default_key_name(key),
-            "key": key,
-            "daily_token_limit": None,
-            "weekly_token_limit": None,
-            "_weekly_token_limit_defaulted": True,
-        })
-        seen.add(key)
-        added += 1
-
-    if added or len(new_items) != len(existing_items):
-        cfg["keys"] = new_items
-        save_quota_config(cfg)
-        log(f"quotas.json synced with config.yaml: added={added}, removed=0")
+    existing_keys = {
+        str(item.get("key") or "").strip()
+        for item in list_or_empty(cfg.get("keys"))
+        if isinstance(item, dict) and str(item.get("key") or "").strip()
+    }
+    config_only_keys = {
+        str(key or "").strip()
+        for key in config_keys
+        if str(key or "").strip() and str(key or "").strip() not in existing_keys
+    }
+    if config_only_keys:
+        # Config membership alone is not strong enough evidence to create quota
+        # rows. A missing quota row may be the result of a stale CPA tombstone or
+        # a bad test/runtime write, and backfilling it here would silently turn a
+        # managed key into an unlimited key.
+        log(
+            "quotas.json sync skipped_config_only_key_count="
+            f"{len(config_only_keys)}; not auto-creating unlimited quota rows"
+        )
 
 
 def today_window_utc(tz_name):
@@ -1319,19 +1337,47 @@ def main():
         if dry_run:
             log("dry_run=true, not modifying config.yaml api-keys or state.json")
         else:
-            state = save_disabled_state(disabled_limited_keys)
+            previous_state = load_quota_state()
+            previously_disabled_by_quota = quota_state_key_set(previous_state, "disabled_by_quota")
+            pending_restore_tombstones = quota_state_key_set(previous_state, CPA_DELETED_RESTORE_PENDING_KEY)
+            state = dict(dict_or_empty(previous_state))
+            state["disabled_by_quota"] = sorted(set(disabled_limited_keys))
             cpa_deleted_keys, cpa_evidence_reliable = load_cpa_deleted_keys_with_status()
+            late_quota_tombstones = {
+                key
+                for key in previously_disabled_by_quota
+                if key not in disabled_limited_keys and (not cpa_evidence_reliable or key in cpa_deleted_keys)
+            }
+            fresh_protected_tombstones = late_quota_tombstones | pending_restore_tombstones
+            if fresh_protected_tombstones:
+                protected = quota_state_key_set(state, CPA_DELETED_WHILE_QUOTA_DISABLED_KEY)
+                state[CPA_DELETED_WHILE_QUOTA_DISABLED_KEY] = sorted(protected | fresh_protected_tombstones)
+                state[CPA_DELETED_RESTORE_PENDING_KEY] = sorted(fresh_protected_tombstones)
+            elif CPA_DELETED_RESTORE_PENDING_KEY in state:
+                state.pop(CPA_DELETED_RESTORE_PENDING_KEY, None)
+            # Persist the reset bridge before config restore/prune. If this run is
+            # interrupted, the next pass must not interpret a stale CPA tombstone as
+            # an intentional manual delete after disabled_by_quota has been cleared.
+            save_quota_state(state)
             manual_deleted_keys = prune_cpa_deleted_quota_items(
                 cfg,
                 state,
                 cpa_deleted_keys,
                 dry_run=False,
                 cpa_evidence_reliable=cpa_evidence_reliable,
+                fresh_protected_tombstones=fresh_protected_tombstones,
             )
             if manual_deleted_keys:
                 active_limited_keys = [key for key in active_limited_keys if key not in manual_deleted_keys]
                 disabled_limited_keys = [key for key in disabled_limited_keys if key not in manual_deleted_keys]
             update_config_api_keys(active_limited_keys, all_limited_keys, dry_run)
+            if fresh_protected_tombstones:
+                pending = quota_state_key_set(state, CPA_DELETED_RESTORE_PENDING_KEY) - fresh_protected_tombstones
+                if pending:
+                    state[CPA_DELETED_RESTORE_PENDING_KEY] = sorted(pending)
+                else:
+                    state.pop(CPA_DELETED_RESTORE_PENDING_KEY, None)
+                save_quota_state(state)
             enforce_auth_quota_if_due(state, dry_run=False, force=force_auth_quota_check)
             save_quota_state(state)
 

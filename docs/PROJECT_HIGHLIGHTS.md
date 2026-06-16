@@ -37,6 +37,7 @@ Operator actions
 - Runtime writes preserve file ownership and inode for bind-mounted config/state files.
 - Quota-disabled, manually-disabled, and deleted-key states are modeled separately to avoid false add/remove notifications.
 - A key is considered manually disabled only when manual state and active proxy-config absence agree, which prevents stale markers from surfacing false Enable options or change notifications.
+- CPA soft-delete tombstones require reliable proxy-config evidence before pruning quota rows, and reset recovery persists bridge state before restoring keys.
 - Reauth alerts canonicalize equivalent evidence and dedupe labels by account identity.
 - Button handlers favor cached or narrow rebuild paths instead of slow full-snapshot refreshes.
 - Automatic notifications wait for observed state changes, with a fast verification path for bot-confirmed actions to avoid delays and duplicates.

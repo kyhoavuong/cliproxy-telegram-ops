@@ -452,7 +452,12 @@ def quota_item_for_key(quotas: dict[str, Any], key: str) -> dict[str, Any] | Non
 
 def remove_key_from_quota_state(data: dict[str, Any], key: str) -> bool:
     changed = False
-    for field in ("disabled_by_quota", MANUALLY_DISABLED_KEYS_FIELD, "cpa_deleted_while_quota_disabled"):
+    for field in (
+        "disabled_by_quota",
+        MANUALLY_DISABLED_KEYS_FIELD,
+        "cpa_deleted_while_quota_disabled",
+        "cpa_deleted_restore_pending",
+    ):
         keys = quota_state_key_set(data, field)
         if key in keys:
             keys.discard(key)

@@ -406,6 +406,16 @@ def api_key_protected_quota_disabled_tombstone(record):
     )
 
 
+def api_key_active_with_protected_quota_tombstone(record):
+    return (
+        isinstance(record, dict)
+        and bool(record.get("cpa_deleted_while_quota_disabled"))
+        and bool(record.get("in_quota"))
+        and bool(record.get("in_proxy_config"))
+        and not bool(record.get("disabled_by_quota"))
+    )
+
+
 def api_key_quota_enforcer_silent_state(record):
     return isinstance(record, dict) and (
         bool(record.get("disabled_by_quota"))
@@ -526,6 +536,10 @@ def api_key_fully_removed(record):
     )
 
 
+def api_key_fully_removed_with_only_historical_tombstone(record):
+    return api_key_fully_removed(record) and bool(record.get("cpa_deleted_while_quota_disabled"))
+
+
 def enqueue_known_active_removals(watch, snapshot, ts):
     known = prune_known_active_keys(watch, ts)
     changed = False
@@ -533,7 +547,14 @@ def enqueue_known_active_removals(watch, snapshot, ts):
         record = snapshot.get(key) if isinstance(snapshot, dict) else None
         if not api_key_fully_removed(record):
             continue
-        if api_key_quota_enforcer_silent_state(record) or recently_saw_quota_disabled_cpa_tombstone(watch, key, ts):
+        historical_tombstone_removal = api_key_fully_removed_with_only_historical_tombstone(record)
+        if (
+            api_key_quota_enforcer_silent_state(record)
+            and not historical_tombstone_removal
+        ) or (
+            recently_saw_quota_disabled_cpa_tombstone(watch, key, ts)
+            and not historical_tombstone_removal
+        ):
             forget_known_active_key(watch, key)
             changed = True
             continue
@@ -697,7 +718,10 @@ def build_change_events(old_snapshot: dict[str, dict[str, Any]], new_snapshot: d
             ))
             continue
         if api_key_quota_enforcer_silent_state(old) and api_key_fully_removed(new):
-            if api_key_protected_quota_disabled_tombstone(old) or api_key_protected_quota_disabled_tombstone(new):
+            if (
+                api_key_protected_quota_disabled_tombstone(old)
+                or api_key_protected_quota_disabled_tombstone(new)
+            ) and not api_key_active_with_protected_quota_tombstone(old):
                 continue
             events.append(logical_event(
                 key,
@@ -1116,13 +1140,19 @@ def flush_pending_change_notifications(watch: dict[str, Any], dry_run: bool = Fa
             # A current logical presence wins over a stale queued removal. This
             # prevents transient backend gaps from becoming false removal chats.
             current_record = snapshot.get(event_key) if event_key else None
-            if (
-                (isinstance(current_record, dict) and (
-                    api_key_logically_present(current_record)
-                    or api_key_quota_enforcer_silent_state(current_record)
-                ))
-                or recently_saw_quota_disabled_cpa_tombstone(watch, event_key, ts)
-            ):
+            current_record_cancels_removal = isinstance(current_record, dict) and (
+                api_key_logically_present(current_record)
+                or (
+                    api_key_quota_enforcer_silent_state(current_record)
+                    and not api_key_fully_removed_with_only_historical_tombstone(current_record)
+                )
+            )
+            current_record_is_historical_tombstone_removal = api_key_fully_removed_with_only_historical_tombstone(current_record)
+            recent_quota_tombstone_cancels_removal = (
+                recently_saw_quota_disabled_cpa_tombstone(watch, event_key, ts)
+                and not current_record_is_historical_tombstone_removal
+            )
+            if current_record_cancels_removal or recent_quota_tombstone_cancels_removal:
                 pending.pop(key, None)
                 forget_known_active_key(watch, event_key)
                 continue

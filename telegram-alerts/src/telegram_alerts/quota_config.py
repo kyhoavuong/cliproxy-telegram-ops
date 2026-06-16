@@ -503,8 +503,12 @@ def sync_cpa_registry_from_quotas():
     proxy_config_available = False
     try:
         if CLIPROXY_CONFIG.exists():
-            proxy_config_keys = set(parse_api_keys_block(CLIPROXY_CONFIG.read_text(encoding="utf-8")))
-            proxy_config_available = True
+            config_text = CLIPROXY_CONFIG.read_text(encoding="utf-8")
+            if any(line.startswith("api-keys:") for line in config_text.splitlines()):
+                proxy_config_keys = set(parse_api_keys_block(config_text))
+                proxy_config_available = True
+            else:
+                log("skipping CPA registry soft-delete sync: proxy config api-keys block unavailable")
         else:
             log("skipping CPA registry soft-delete sync: proxy config unavailable")
     except Exception as exc:
@@ -526,7 +530,13 @@ def sync_cpa_registry_from_quotas():
             ).fetchone()
             if row:
                 row_is_deleted = bool(row[3])
-                if row_is_deleted and key not in disabled_by_quota and key not in manual_disabled and key not in protected_tombstone_keys:
+                protected_deleted_key = (
+                    key in disabled_by_quota
+                    or key in manual_disabled
+                    or key in protected_tombstone_keys
+                    or (proxy_config_available and key in proxy_config_keys)
+                )
+                if row_is_deleted and not protected_deleted_key:
                     continue
                 alias = quota_alias or key[:8]
                 if not row_is_deleted:

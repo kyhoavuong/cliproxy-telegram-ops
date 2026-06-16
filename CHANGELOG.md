@@ -6,7 +6,12 @@ This project follows a lightweight release format inspired by Keep a Changelog a
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Hardened CPA tombstone recovery so quota-disabled keys are not mistaken for manual deletes during reset windows.
+- Stopped quota-enforcer from recreating missing quota rows from proxy config as unlimited/default rows.
+- Added regression guards so quota-enforcer tests fail before writing real runtime quota, state, or proxy config files.
+- Preserved true manual delete notifications after protected quota-disabled tombstones have been restored.
 
 ## [0.2.1] - 2026-06-16
 
