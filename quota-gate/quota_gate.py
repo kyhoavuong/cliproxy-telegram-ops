@@ -42,9 +42,6 @@ MISSING = object()
 
 SKIP_QUOTA_PREFIXES = (
     "/quota",
-    "/usage",
-    "/v0/management",
-    "/management.html",
     "/healthz",
     "/keep-alive",
     "/anthropic/callback",
@@ -52,6 +49,14 @@ SKIP_QUOTA_PREFIXES = (
     "/google/callback",
     "/antigravity/callback",
     "/favicon",
+)
+
+# Dashboard and management surfaces should not be exposed by quota-gate when
+# it is deployed as a full reverse proxy fallback.
+BLOCKED_PROXY_PREFIXES = (
+    "/v0/management",
+    "/management.html",
+    "/usage",
 )
 
 _cache = {
@@ -351,8 +356,20 @@ def quota_summary_for_key(key):
     }
 
 
+def path_matches_prefix(path, prefixes):
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes)
+
+
 def should_skip_quota(path):
-    return any(path == p or path.startswith(p + "/") for p in SKIP_QUOTA_PREFIXES)
+    return path_matches_prefix(path, SKIP_QUOTA_PREFIXES)
+
+
+def should_block_proxy_path(path):
+    return path_matches_prefix(path, BLOCKED_PROXY_PREFIXES)
+
+
+async def blocked_proxy_route(request):
+    return web.json_response({"error": "forbidden"}, status=403)
 
 
 async def healthz(request):
@@ -378,6 +395,13 @@ async def quota_me(request):
             status=401,
         )
 
+    data = load_quota_data()
+    if key not in data.get("by_key", {}):
+        return web.json_response(
+            {"error": "unauthorized", "message": "Invalid API key"},
+            status=401,
+        )
+
     return web.json_response(quota_summary_for_key(key))
 
 
@@ -395,6 +419,9 @@ async def reject_quota(request, key):
 
 
 async def proxy_request(request):
+    if should_block_proxy_path(request.path):
+        return await blocked_proxy_route(request)
+
     key = extract_api_key(request)
 
     if key and not should_skip_quota(request.path):

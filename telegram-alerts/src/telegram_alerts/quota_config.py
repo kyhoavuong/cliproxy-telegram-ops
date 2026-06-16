@@ -1,8 +1,10 @@
 """Quota/config file helpers used by Telegram actions and usage snapshots."""
 
 from __future__ import annotations
+from contextlib import contextmanager
 from typing import Any
 
+import fcntl
 import json
 import os
 import re
@@ -19,6 +21,7 @@ from .settings import (
     ACTION_BACKUP_INCLUDE_USAGE_DB,
     ACTION_BACKUP_KEEP,
     ACTION_BACKUP_MAX_AGE_DAYS,
+    BASE_DIR,
     CLIPROXY_CONFIG,
     QUOTA_CONFIG,
     QUOTA_STATE,
@@ -27,6 +30,19 @@ from .settings import (
 )
 from .utils import fmt_limit, log, log_timing, mask_key, monotonic_ms, normalize_limit
 from .storage import fsync_parent, load_json
+
+QUOTA_RUNTIME_LOCK = BASE_DIR / "quota-enforcer" / "quota_enforcer.lock"
+
+
+@contextmanager
+def quota_runtime_lock():
+    QUOTA_RUNTIME_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with QUOTA_RUNTIME_LOCK.open("w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 def parse_api_keys_block(config_text):
     lines = config_text.splitlines()

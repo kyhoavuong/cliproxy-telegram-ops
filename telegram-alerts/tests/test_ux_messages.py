@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import json
 import sqlite3
 import tempfile
@@ -53,6 +54,15 @@ def auth_observation(healthy=None, failed=None, complete=True, reason=""):
 
 
 class TelegramUxMessageTests(unittest.TestCase):
+    def setUp(self):
+        @contextmanager
+        def unlocked_runtime():
+            yield
+
+        self._runtime_lock_patch = mock.patch("telegram_alerts.actions.quota_runtime_lock", unlocked_runtime)
+        self._runtime_lock_patch.start()
+        self.addCleanup(self._runtime_lock_patch.stop)
+
     def test_menu_keyboard_matches_flat_top_level_layout(self):
         markup = menu_keyboard()
         labels = [button["text"] for row in markup["inline_keyboard"] for button in row]
@@ -2254,6 +2264,105 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertNotIn("This creates a shared API key.", result["text"])
         self.assertNotIn("alice-secret-key", result["text"])
 
+    def test_key_create_acquires_runtime_lock_around_shared_writes(self):
+        events = []
+
+        @contextmanager
+        def fake_lock():
+            events.append("lock_enter")
+            try:
+                yield
+            finally:
+                events.append("lock_exit")
+
+        def record_write(name):
+            def _record(*args, **kwargs):
+                self.assertIn("lock_enter", events)
+                self.assertNotIn("lock_exit", events)
+                events.append(name)
+            return _record
+
+        with mock.patch("telegram_alerts.actions.parse_api_keys_block", return_value=[]), \
+             mock.patch("telegram_alerts.actions.CLIPROXY_CONFIG", mock.Mock(read_text=mock.Mock(return_value=""))), \
+             mock.patch("telegram_alerts.actions.load_quotas_json", return_value={"keys": []}), \
+             mock.patch("telegram_alerts.actions.quota_runtime_lock", fake_lock, create=True), \
+             mock.patch("telegram_alerts.actions.backup_action_files", side_effect=record_write("backup")), \
+             mock.patch("telegram_alerts.actions.write_config_api_keys", side_effect=record_write("config")), \
+             mock.patch("telegram_alerts.actions.save_quotas_json", side_effect=record_write("quotas")), \
+             mock.patch("telegram_alerts.actions.upsert_cpa_api_key_alias", side_effect=record_write("cpa")):
+            execute_key_create({"alias": "alice", "name": "alice", "daily": 20_000_000, "weekly": "default", "key": "alice-secret-key"})
+
+        self.assertEqual(events[0], "lock_enter")
+        self.assertEqual(events[-1], "lock_exit")
+        self.assertIn("config", events)
+        self.assertIn("quotas", events)
+
+    def test_quota_set_acquires_runtime_lock_around_quota_write(self):
+        events = []
+        quotas = {"keys": [{"name": "alice", "key": "alice-key", "daily_token_limit": 4_000_000, "weekly_token_limit": 16_000_000}]}
+
+        @contextmanager
+        def fake_lock():
+            events.append("lock_enter")
+            try:
+                yield
+            finally:
+                events.append("lock_exit")
+
+        def save_quotas(data):
+            self.assertIn("lock_enter", events)
+            self.assertNotIn("lock_exit", events)
+            events.append("save_quotas")
+
+        with mock.patch("telegram_alerts.actions.load_quotas_json", return_value=quotas), \
+             mock.patch("telegram_alerts.actions.load_cpa_alias_map", return_value={"alice-key": "alice"}), \
+             mock.patch("telegram_alerts.actions.quota_runtime_lock", fake_lock, create=True), \
+             mock.patch("telegram_alerts.actions.backup_action_files", return_value="backup"), \
+             mock.patch("telegram_alerts.actions.save_quotas_json", side_effect=save_quotas):
+            execute_quota_set({"query": "alice", "daily": 20_000_000, "weekly": "default"})
+
+        self.assertEqual(events, ["lock_enter", "save_quotas", "lock_exit"])
+
+    def test_key_management_actions_acquire_runtime_lock_around_shared_writes(self):
+        for action_type, state_data in (
+            ("key_disable", {}),
+            ("key_enable", {"manually_disabled_keys": ["alice-key"]}),
+            ("key_delete", {"manually_disabled_keys": ["alice-key"]}),
+        ):
+            with self.subTest(action_type=action_type):
+                events = []
+                quotas = {"keys": [{"name": "alice", "key": "alice-key", "daily_token_limit": 1}]}
+
+                @contextmanager
+                def fake_lock():
+                    events.append("lock_enter")
+                    try:
+                        yield
+                    finally:
+                        events.append("lock_exit")
+
+                def record_write(name):
+                    def _record(*args, **kwargs):
+                        self.assertIn("lock_enter", events)
+                        self.assertNotIn("lock_exit", events)
+                        events.append(name)
+                    return _record
+
+                with mock.patch("telegram_alerts.actions.load_quotas_json", return_value=quotas), \
+                     mock.patch("telegram_alerts.actions.quota_state_data", return_value=dict(state_data)), \
+                     mock.patch("telegram_alerts.actions.config_api_keys", return_value=["alice-key"] if action_type != "key_enable" else []), \
+                     mock.patch("telegram_alerts.actions.quota_runtime_lock", fake_lock, create=True), \
+                     mock.patch("telegram_alerts.actions.backup_action_files", side_effect=record_write("backup")), \
+                     mock.patch("telegram_alerts.actions.write_config_api_keys", side_effect=record_write("config")), \
+                     mock.patch("telegram_alerts.actions.save_quotas_json", side_effect=record_write("quotas")), \
+                     mock.patch("telegram_alerts.actions.save_quota_state_json", side_effect=record_write("state")), \
+                     mock.patch("telegram_alerts.actions.soft_delete_cpa_api_key", side_effect=record_write("cpa_delete")):
+                    execute_key_management(action_type, {"key": "alice-key", "alias": "alice"})
+
+                self.assertEqual(events[0], "lock_enter")
+                self.assertEqual(events[-1], "lock_exit")
+                self.assertTrue(any(name in events for name in ("config", "quotas", "state")))
+
     def test_key_create_success_reminds_operator_to_keep_key_private(self):
         with mock.patch("telegram_alerts.actions.parse_api_keys_block", return_value=[]), \
              mock.patch("telegram_alerts.actions.CLIPROXY_CONFIG", mock.Mock(read_text=mock.Mock(return_value=""))), \
@@ -2313,6 +2422,42 @@ class TelegramUxMessageTests(unittest.TestCase):
             self.assertEqual((after.st_dev, after.st_ino), (before.st_dev, before.st_ino))
             self.assertEqual(json.loads(saved)["keys"][0]["name"], "alice")
             self.assertTrue(saved.endswith("\n"))
+
+    def test_write_config_api_keys_preserves_existing_runtime_file_inode_and_avoids_replace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text('server: true\napi-keys:\n  - "old-key"\nother: value\n', encoding="utf-8")
+            before = config_path.stat()
+
+            with mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch("telegram_alerts.storage.os.replace", side_effect=AssertionError("os.replace called")):
+                quota_config_module.write_config_api_keys(["new-key"])
+
+            after = config_path.stat()
+            saved = config_path.read_text(encoding="utf-8")
+
+            self.assertEqual((after.st_dev, after.st_ino), (before.st_dev, before.st_ino))
+            self.assertIn('  - "new-key"', saved)
+            self.assertNotIn("old-key", saved)
+            self.assertTrue(saved.endswith("\n"))
+
+    def test_quota_runtime_lock_uses_shared_quota_enforcer_lock_file(self):
+        self.assertTrue(hasattr(quota_config_module, "quota_runtime_lock"))
+        self.assertTrue(hasattr(quota_config_module, "fcntl"))
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / "quota-enforcer" / "quota_enforcer.lock"
+            calls = []
+
+            def record_flock(file_obj, operation):
+                calls.append((Path(file_obj.name), operation))
+
+            with mock.patch.object(quota_config_module, "QUOTA_RUNTIME_LOCK", lock_path, create=True), \
+                 mock.patch.object(quota_config_module.fcntl, "flock", side_effect=record_flock):
+                with quota_config_module.quota_runtime_lock():
+                    self.assertTrue(lock_path.exists())
+
+            self.assertEqual(calls[0], (lock_path, quota_config_module.fcntl.LOCK_EX))
+            self.assertEqual(calls[-1], (lock_path, quota_config_module.fcntl.LOCK_UN))
 
     def test_manual_disable_and_enable_quota_state_writes_preserve_inode_and_avoid_replace(self):
         key = "alice-secret-key"

@@ -46,6 +46,12 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
         finally:
             con.close()
 
+    def test_quota_enforcer_lock_path_is_shared_runtime_lock(self):
+        self.assertEqual(
+            self.module.LOCK_FILE,
+            self.module.BASE_DIR / "quota-enforcer" / "quota_enforcer.lock",
+        )
+
     def test_parse_api_keys_block_returns_empty_list_for_inline_empty_block(self):
         lines, start, end, keys = self.module.parse_api_keys_block("server: true\napi-keys: []\nother: value\n")
 

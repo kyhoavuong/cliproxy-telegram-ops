@@ -35,11 +35,11 @@ def is_authorized(chat_id, user_id):
     user_id = str(user_id or "")
     chats = allowed_chat_ids()
     users = allowed_user_ids()
+    if not chats or chat_id not in chats:
+        return False
     if users and user_id not in users:
         return False
-    if chats and chat_id not in chats:
-        return False
-    return bool(chats or users)
+    return True
 
 def short_code(length=6):
     alphabet = string.ascii_lowercase + string.digits

@@ -32,6 +32,7 @@ from .quota_config import (
     parse_key_create_answer,
     parse_limit,
     quota_account_by_key,
+    quota_runtime_lock,
     quota_update_summary,
     save_quota_state_json,
     save_quotas_json,
@@ -287,9 +288,15 @@ def handle_pending_input(
 
 def execute_key_create(params: dict[str, Any]) -> str:
     """Create one shared API key across proxy config, quota config, and CPA alias rows.
-    
-    Callers must have already created a rollback backup and confirmed operator intent;
-    the returned string intentionally includes the final full key."""
+
+    Callers must have already confirmed operator intent; the shared runtime lock
+    covers the full read-modify-write sequence. The returned string intentionally
+    includes the final full key."""
+    with quota_runtime_lock():
+        return _execute_key_create_locked(params)
+
+
+def _execute_key_create_locked(params: dict[str, Any]) -> str:
     name = slugify_name(params["name"])
     alias = str(params.get("alias") or name).strip()
     daily = params["daily"]
@@ -344,10 +351,15 @@ def execute_key_create(params: dict[str, Any]) -> str:
     ])
 
 def execute_quota_set(params: dict[str, Any], return_key: bool = False) -> str | tuple[str, str]:
-    """Apply one confirmed quota update after creating a rollback backup.
-    
+    """Apply one confirmed quota update under the shared runtime lock.
+
     The weekly value preserves quota semantics: default removes the explicit field,
     None disables the weekly cap, and integers set a finite weekly cap."""
+    with quota_runtime_lock():
+        return _execute_quota_set_locked(params, return_key=return_key)
+
+
+def _execute_quota_set_locked(params: dict[str, Any], return_key: bool = False) -> str | tuple[str, str]:
     query = params["query"]
     daily = params["daily"]
     weekly = params["weekly"]
@@ -450,6 +462,11 @@ def remove_key_from_quota_state(data: dict[str, Any], key: str) -> bool:
 
 
 def execute_key_management(action_type: str, params: dict[str, Any]) -> None:
+    with quota_runtime_lock():
+        return _execute_key_management_locked(action_type, params)
+
+
+def _execute_key_management_locked(action_type: str, params: dict[str, Any]) -> None:
     key = str(params.get("key") or "").strip()
     alias = key_alias_for_message(params)
     if not key:
