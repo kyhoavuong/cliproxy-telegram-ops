@@ -6,6 +6,10 @@ This project follows a lightweight release format inspired by Keep a Changelog a
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+## [0.2.2] - 2026-06-17
+
 ### Fixed
 
 - Hardened CPA tombstone recovery so quota-disabled keys are not mistaken for manual deletes during reset windows.
@@ -43,7 +47,8 @@ This project follows a lightweight release format inspired by Keep a Changelog a
 - Telegram alert, operator workflow, quota-management, and change-watch test coverage.
 - Public Docker quickstart, security policy, contribution guide, and architecture documentation.
 
-[Unreleased]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.2.1
 [0.2.0]: https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.1.0
