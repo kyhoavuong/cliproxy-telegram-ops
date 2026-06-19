@@ -19,6 +19,7 @@ from .settings import (
 )
 from .utils import log, mask_key, normalize_limit, now_ts, short_code
 from .storage import load_json
+from .provider_labels import infer_provider_from_values, provider_display_label
 from .quota_config import format_effective_weekly_for_reply, format_limit_for_reply, format_operator_quota_limit, load_cpa_key_records, load_quotas_json, parse_api_keys_block, preferred_quota_alias
 from .telegram_client import send_telegram
 
@@ -268,20 +269,17 @@ def safe_proxy_account_label(event):
 def proxy_account_provider_label(event):
     event = event or {}
     evidence = event.get("evidence") if isinstance(event.get("evidence"), dict) else {}
-    account_type = str(evidence.get("account_type") or "").strip().lower()
-    if not account_type:
-        for change in event.get("changes") or []:
-            text = str(change or "").strip()
-            if text.lower().startswith("type: "):
-                account_type = text.split(":", 1)[1].strip().lower()
-                break
-    if account_type == "codex":
-        return "Codex"
-    if account_type == "antigravity":
-        return "Antigravity"
-    if is_codex_account_label(event.get("account")) or is_codex_account_label(event.get("key")):
-        return "Codex"
-    return "Proxy"
+    account_type = str(evidence.get("account_type") or "").strip()
+    change_type = ""
+    for change in event.get("changes") or []:
+        text = str(change or "").strip()
+        if text.lower().startswith("type: "):
+            change_type = text.split(":", 1)[1].strip()
+            break
+    provider = infer_provider_from_values(account_type, change_type, event.get("account"), event.get("key"))
+    if not provider and (is_codex_account_label(event.get("account")) or is_codex_account_label(event.get("key"))):
+        provider = "codex"
+    return provider_display_label(provider, fallback="Proxy")
 
 
 def format_change_value(value):

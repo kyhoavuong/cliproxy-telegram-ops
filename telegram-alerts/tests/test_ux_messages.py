@@ -53,6 +53,37 @@ def auth_observation(healthy=None, failed=None, complete=True, reason=""):
     }
 
 
+def create_action_usage_db(path, *, rows=()):
+    con = sqlite3.connect(path)
+    try:
+        con.execute(
+            """
+            CREATE TABLE cpa_api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                api_key TEXT UNIQUE,
+                display_key TEXT,
+                key_alias TEXT,
+                is_deleted INTEGER DEFAULT 0,
+                last_synced_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        for api_key, alias, is_deleted in rows:
+            con.execute(
+                """
+                INSERT INTO cpa_api_keys
+                  (api_key, display_key, key_alias, is_deleted, last_synced_at, created_at, updated_at)
+                VALUES (?, 'masked', ?, ?, 'old', 'old', 'old')
+                """,
+                (api_key, alias, is_deleted),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
 class TelegramUxMessageTests(unittest.TestCase):
     def setUp(self):
         @contextmanager
@@ -318,6 +349,30 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertIn("Auth Accounts", text)
         self.assertIn("- None found", text)
         self.assertNotIn("Usage today", text)
+
+    def test_overview_auth_account_provider_names_are_normalized(self):
+        snapshot = {
+            "created_at": 0,
+            "service_lines": [],
+            "system_alerts": {},
+            "auth_quota_observation": auth_observation(),
+            "quota_signals": {},
+            "quota_rows": [],
+            "quota_error": "",
+            "enforcer_age": "5s",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            auth_dir = Path(tmp)
+            (auth_dir / "codex-one.json").write_text(json.dumps({"type": "CODEX", "disabled": False}), encoding="utf-8")
+            (auth_dir / "ag-one.json").write_text(json.dumps({"type": "anti_gravity", "disabled": True}), encoding="utf-8")
+            with mock.patch.object(snapshot_module, "AUTH_DIR", auth_dir, create=True), \
+                 mock.patch.object(snapshot_module, "now_ts", return_value=21), \
+                 mock.patch.object(snapshot_module, "BOT_STARTED_AT", 0):
+                text = build_overview_reply(snapshot)
+
+        self.assertIn("- Codex: 1 enabled, 0 disabled", text)
+        self.assertIn("- Antigravity: 0 enabled, 1 disabled", text)
+        self.assertNotIn("Anti Gravity", text)
 
     def test_empty_incidents_reply_lists_checks_performed(self):
         snapshot = {
@@ -2923,7 +2978,8 @@ class TelegramUxMessageTests(unittest.TestCase):
                 }
             }
         }
-        with mock.patch("telegram_alerts.actions.execute_quota_set", return_value=("Quota updated.", "alice-key")):
+        with mock.patch("telegram_alerts.actions.execute_quota_set", return_value=("Quota updated.", "alice-key")), \
+             mock.patch("telegram_alerts.actions.verify_mutation", return_value=mock.Mock(warning_line=mock.Mock(return_value=""))):
             result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
 
         self.assertEqual(result["text"], "Quota updated.")
@@ -2950,7 +3006,8 @@ class TelegramUxMessageTests(unittest.TestCase):
                 }
             }
         }
-        with mock.patch("telegram_alerts.actions.execute_quota_set", return_value=("Quota updated.", "alice-key")):
+        with mock.patch("telegram_alerts.actions.execute_quota_set", return_value=("Quota updated.", "alice-key")), \
+             mock.patch("telegram_alerts.actions.verify_mutation", return_value=mock.Mock(warning_line=mock.Mock(return_value=""))):
             result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
 
         keyboard = result.get("reply_markup", {}).get("inline_keyboard", [])
@@ -3795,6 +3852,173 @@ class TelegramUxMessageTests(unittest.TestCase):
 
             self.assertIsNone(result)
 
+    def test_key_disable_verification_success_keeps_current_success_copy(self):
+        key = "hung31-secret-7BfCD"
+        state = {
+            "pending_actions": {
+                "chat:user": {
+                    "code": "abc123",
+                    "type": "key_disable",
+                    "params": {"key": key, "alias": "tuanhung31"},
+                    "summary": "Pending key disable\n\nUser: tuanhung31",
+                    "expires_at": 99_999_999_999,
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            state_path = base / "state.json"
+            config_path = base / "config.yaml"
+            db_path = base / "app.db"
+            quota_path.write_text(json.dumps({"keys": [{"key": key, "name": "tuanhung31", "daily_token_limit": 1}]}) + "\n", encoding="utf-8")
+            state_path.write_text("{}\n", encoding="utf-8")
+            config_path.write_text(f'api-keys:\n  - "{key}"\n', encoding="utf-8")
+            create_action_usage_db(db_path, rows=[(key, "tuanhung31", 0)])
+
+            with mock.patch.object(actions_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(actions_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(actions_module, "backup_action_files"), \
+                 mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "USAGE_DB", db_path):
+                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+
+        self.assertEqual(
+            result["text"],
+            "API key disabled.\n\n"
+            "User: tuanhung31\n"
+            "API key: hung3***7BfCD\n"
+            "Status: Disabled\n\n"
+            "This key can no longer be used for API requests.",
+        )
+        self.assertNotIn("Verified:", result["text"])
+        self.assertNotIn("verification", result["text"].lower())
+        self.assertNotIn(key, result["text"])
+
+    def test_key_enable_verification_warns_when_usage_registry_unavailable(self):
+        key = "hung31-secret-7BfCD"
+        state = {
+            "pending_actions": {
+                "chat:user": {
+                    "code": "abc123",
+                    "type": "key_enable",
+                    "params": {"key": key, "alias": "tuanhung31"},
+                    "summary": "Pending key enable\n\nUser: tuanhung31",
+                    "expires_at": 99_999_999_999,
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            state_path = base / "state.json"
+            config_path = base / "config.yaml"
+            missing_db = base / "missing-app.db"
+            quota_path.write_text(json.dumps({"keys": [{"key": key, "name": "tuanhung31", "daily_token_limit": 1}]}) + "\n", encoding="utf-8")
+            state_path.write_text(json.dumps({"manually_disabled_keys": [key]}) + "\n", encoding="utf-8")
+            config_path.write_text("api-keys: []\n", encoding="utf-8")
+
+            with mock.patch.object(actions_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(actions_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(actions_module, "backup_action_files"), \
+                 mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "USAGE_DB", missing_db):
+                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+
+        self.assertIn("API key enabled.", result["text"])
+        self.assertIn("Saved, but verification could not confirm usage registry.", result["text"])
+        self.assertNotIn(key, result["text"])
+
+    def test_key_delete_verification_warns_when_proxy_config_still_lists_key(self):
+        key = "delete-secret-key"
+        state = {
+            "pending_actions": {
+                "chat:user": {
+                    "code": "abc123",
+                    "type": "key_delete",
+                    "params": {"key": key, "alias": "delete-user"},
+                    "summary": "Pending key delete\n\nUser: delete-user",
+                    "expires_at": 99_999_999_999,
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            state_path = base / "state.json"
+            config_path = base / "config.yaml"
+            db_path = base / "app.db"
+            quota_path.write_text(json.dumps({"keys": [{"key": key, "name": "delete-user", "daily_token_limit": 1}]}) + "\n", encoding="utf-8")
+            state_path.write_text(json.dumps({"manually_disabled_keys": [key]}) + "\n", encoding="utf-8")
+            config_path.write_text(f'api-keys:\n  - "{key}"\n', encoding="utf-8")
+            create_action_usage_db(db_path, rows=[(key, "delete-user", 0)])
+
+            original_write_config = quota_config_module.write_config_api_keys
+            def stale_proxy_write(keys):
+                original_write_config(keys)
+                config_path.write_text(f'api-keys:\n  - "{key}"\n', encoding="utf-8")
+
+            with mock.patch.object(actions_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(actions_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(actions_module, "backup_action_files"), \
+                 mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "USAGE_DB", db_path), \
+                 mock.patch.object(actions_module, "write_config_api_keys", side_effect=stale_proxy_write):
+                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+
+        self.assertIn("API key deleted.", result["text"])
+        self.assertIn("Saved, but verification found a mismatch: proxy config still lists this key.", result["text"])
+        self.assertNotIn(key, result["text"])
+
+    def test_quota_set_verification_warns_if_state_markers_change(self):
+        key = "quota-secret-key"
+        state = {
+            "pending_actions": {
+                "chat:user": {
+                    "code": "abc123",
+                    "type": "quota_set",
+                    "params": {"query": key, "daily": 20_000_000, "weekly": "default", "quota_kind": "daily"},
+                    "summary": "Pending quota update\n\nUser: quota-user",
+                    "expires_at": 99_999_999_999,
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            state_path = base / "state.json"
+            config_path = base / "config.yaml"
+            db_path = base / "app.db"
+            quota_path.write_text(json.dumps({"keys": [{"key": key, "name": "quota-user", "daily_token_limit": 1}]}) + "\n", encoding="utf-8")
+            state_path.write_text(json.dumps({"manually_disabled_keys": ["other-key"]}) + "\n", encoding="utf-8")
+            config_path.write_text(f'api-keys:\n  - "{key}"\n', encoding="utf-8")
+            create_action_usage_db(db_path, rows=[(key, "quota-user", 0)])
+
+            original_save = quota_config_module.save_quotas_json
+            def mutate_state_while_saving(data):
+                original_save(data)
+                state_path.write_text(json.dumps({"manually_disabled_keys": ["other-key", key]}) + "\n", encoding="utf-8")
+
+            with mock.patch.object(actions_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(actions_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(actions_module, "backup_action_files", return_value="backup"), \
+                 mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "USAGE_DB", db_path), \
+                 mock.patch.object(actions_module, "save_quotas_json", side_effect=mutate_state_while_saving):
+                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+
+        self.assertIn("Quota update applied.", result["text"])
+        self.assertIn("Saved, but verification found a mismatch: state markers changed during quota update.", result["text"])
+        self.assertNotIn(key, result["text"].split("Saved, but", 1)[1])
+
     def test_key_disable_confirm_returns_operator_success_after_mutation(self):
         key = "hung31-secret-7BfCD"
         state = {
@@ -3815,6 +4039,7 @@ class TelegramUxMessageTests(unittest.TestCase):
              mock.patch("telegram_alerts.actions.load_json", return_value={}), \
              mock.patch("telegram_alerts.actions.save_quota_state_json"), \
              mock.patch("telegram_alerts.actions.backup_action_files"), \
+             mock.patch("telegram_alerts.actions.verify_mutation", return_value=mock.Mock(warning_line=mock.Mock(return_value=""))), \
              mock.patch("telegram_alerts.actions.CLIPROXY_CONFIG", mock.Mock(read_text=mock.Mock(return_value="api-keys: []"))):
             result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
 
@@ -3855,6 +4080,7 @@ class TelegramUxMessageTests(unittest.TestCase):
              mock.patch("telegram_alerts.actions.load_json", return_value={"manually_disabled_keys": [key]}), \
              mock.patch("telegram_alerts.actions.save_quota_state_json"), \
              mock.patch("telegram_alerts.actions.backup_action_files"), \
+             mock.patch("telegram_alerts.actions.verify_mutation", return_value=mock.Mock(warning_line=mock.Mock(return_value=""))), \
              mock.patch("telegram_alerts.actions.CLIPROXY_CONFIG", mock.Mock(read_text=mock.Mock(return_value="api-keys: []"))):
             result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
 
@@ -3973,6 +4199,7 @@ class TelegramUxMessageTests(unittest.TestCase):
                      mock.patch("telegram_alerts.actions.save_quota_state_json") as save_state, \
                      mock.patch("telegram_alerts.actions.backup_action_files"), \
                      mock.patch("telegram_alerts.actions.soft_delete_cpa_api_key") as soft_delete, \
+                     mock.patch("telegram_alerts.actions.verify_mutation", return_value=mock.Mock(warning_line=mock.Mock(return_value=""))), \
                      mock.patch("telegram_alerts.actions.CLIPROXY_CONFIG", mock.Mock(read_text=mock.Mock(return_value="api-keys: []"))):
                     result = create_pending_action(
                         state,

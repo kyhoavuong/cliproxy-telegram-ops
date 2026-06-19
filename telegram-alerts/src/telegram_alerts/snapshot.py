@@ -26,6 +26,7 @@ from .settings import (
 )
 from .utils import fmt_duration, fmt_limit, fmt_tokens, key_ref, log_timing, mask_key, monotonic_ms, now_ts, percent
 from .models import Alert
+from .provider_labels import normalize_provider, provider_title_label
 from .quota_config import load_cpa_alias_map, load_quota_data, preferred_quota_alias
 from .storage import load_json
 from .usage import get_usage_for_items, usage_rate_estimate, capacity_demand_rate_estimate
@@ -953,6 +954,9 @@ def auth_type_from_file(path, data):
         value = str(data.get("type") or "").strip().lower()
     if not value:
         value = path.stem.split("-", 1)[0].strip().lower()
+    normalized = normalize_provider(value)
+    if normalized in {"codex", "antigravity"}:
+        return normalized
     if not re.fullmatch(r"[a-z0-9_-]{1,32}", value or ""):
         return "unknown"
     return value
@@ -977,8 +981,7 @@ def auth_account_type_counts():
 
 
 def title_case_account_type(value):
-    words = re.split(r"[-_\s]+", str(value or "").strip())
-    return " ".join(word[:1].upper() + word[1:].lower() for word in words if word) or "Unknown"
+    return provider_title_label(value)
 
 
 def auth_account_overview_lines():

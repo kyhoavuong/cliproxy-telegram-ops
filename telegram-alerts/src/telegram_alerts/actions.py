@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Any
 from .contracts import TelegramReply
+from .mutation_verification import append_verification_warning, quota_marker_snapshot, verify_mutation
 
 from .settings import API_PUBLIC_BASE_URL, CLIPROXY_CONFIG, PENDING_ACTION_TTL_SECONDS, QUOTA_STATE
 from .storage import load_json
@@ -645,6 +646,7 @@ def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_
     params = pending.get("params", {})
     changed_key = str(params.get("key") or "").strip()
     audit_action = True
+    before_markers = quota_marker_snapshot() if action_type == "quota_set" else None
     if action_type == "key_create":
         result = reply(execute_key_create(params), key_create_actions_keyboard())
     elif action_type == "quota_set":
@@ -673,6 +675,16 @@ def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_
         result = reply(execute_key_reveal(params), key_reveal_actions_keyboard())
     else:
         raise ValueError(f"unknown pending action type: {action_type}")
+
+    if action_type in {"key_create", "quota_set", "key_disable", "key_enable", "key_delete"} and audit_action:
+        verification = verify_mutation(
+            action_type,
+            params,
+            changed_key=changed_key,
+            before_markers=before_markers,
+        )
+        if isinstance(result, dict) and isinstance(result.get("text"), str):
+            result["text"] = append_verification_warning(result["text"], verification)
 
     cleanup_ids = cleanup_message_ids_from(pending.get("cleanup_message_ids"))
     if cleanup_ids and isinstance(result, dict):

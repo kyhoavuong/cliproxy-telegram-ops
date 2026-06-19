@@ -568,6 +568,51 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         self.assertEqual(text, "Antigravity account added\n\n- huyluongnguyentkvn@gmail.com")
         self.assertNotIn("Proxy account", text)
 
+    def test_antigravity_account_removed_renders_provider_template(self):
+        old = {"auth:antigravity-user@example.com": auth_record(alias="antigravity-user@example.com", account_type="antigravity")}
+        new = {}
+
+        events = build_change_events(old, new)
+        text = format_change_event(events[0])
+
+        self.assertEqual(text, "Antigravity account removed\n\n- antigravity-user@example.com")
+        self.assertNotIn("Proxy account", text)
+
+    def test_unknown_provider_account_add_falls_back_to_proxy_account(self):
+        old = {}
+        new = {"auth:unknown-user.json": auth_record(alias="unknown-user", account_type="")}
+
+        events = build_change_events(old, new)
+        text = format_change_event(events[0])
+
+        self.assertEqual(text, "Proxy account added\n\n- unknown-user")
+
+    def test_inferred_antigravity_provider_does_not_fall_back_to_proxy(self):
+        old = {}
+        new = {"auth:antigravity-one.json": auth_record(alias="antigravity-one", account_type="")}
+
+        events = build_change_events(old, new)
+        text = format_change_event(events[0])
+
+        self.assertEqual(text, "Antigravity account added\n\n- antigravity-one")
+        self.assertNotIn("Proxy account", text)
+
+    def test_provider_account_render_masks_secret_like_labels(self):
+        event = {
+            "key": "auth:codex-secret.json",
+            "logical_type": "auth_account_added",
+            "title": "Proxy account added",
+            "account": "sk-secret-token-abcdefghijklmnopqrstuvwxyz",
+            "changes": ["Type: codex"],
+            "evidence": {"account_type": "codex"},
+        }
+
+        text = format_change_event(event)
+
+        self.assertTrue(text.startswith("Codex account added\n\n- "))
+        self.assertNotIn("sk-secret-token-abcdefghijklmnopqrstuvwxyz", text)
+        self.assertNotIn("Proxy account", text)
+
     def test_two_codex_account_adds_group_into_one_message(self):
         old = {}
         new = {
