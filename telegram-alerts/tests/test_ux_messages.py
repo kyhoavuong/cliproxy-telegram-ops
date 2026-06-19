@@ -3521,15 +3521,23 @@ class TelegramUxMessageTests(unittest.TestCase):
                 con.execute(
                     """
                     CREATE TABLE cpa_api_keys (
-                        api_key TEXT PRIMARY KEY,
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        api_key TEXT UNIQUE,
                         display_key TEXT,
                         key_alias TEXT,
-                        is_deleted INTEGER DEFAULT 0
+                        is_deleted INTEGER DEFAULT 0,
+                        last_synced_at TEXT,
+                        created_at TEXT,
+                        updated_at TEXT
                     )
                     """
                 )
                 con.execute(
-                    "INSERT INTO cpa_api_keys (api_key, display_key, key_alias, is_deleted) VALUES (?, ?, ?, 0)",
+                    """
+                    INSERT INTO cpa_api_keys
+                      (api_key, display_key, key_alias, is_deleted, last_synced_at, created_at, updated_at)
+                    VALUES (?, ?, ?, 0, 'old', 'old', 'old')
+                    """,
                     (key, "display", "hominhquang"),
                 )
                 con.commit()
@@ -3549,20 +3557,41 @@ class TelegramUxMessageTests(unittest.TestCase):
                 saved_state = json.loads(state_path.read_text(encoding="utf-8"))
                 con = sqlite3.connect(db_path)
                 try:
-                    cpa_row = con.execute(
+                    cpa_row_after_disable = con.execute(
+                        "SELECT key_alias, is_deleted FROM cpa_api_keys WHERE api_key = ?",
+                        (key,),
+                    ).fetchone()
+                    con.execute(
+                        "UPDATE cpa_api_keys SET is_deleted = 1, updated_at = 'usage-keeper-metadata-sync' WHERE api_key = ?",
+                        (key,),
+                    )
+                    con.commit()
+                finally:
+                    con.close()
+                sync_changed = quota_config_module.sync_cpa_registry_from_quotas()
+                con = sqlite3.connect(db_path)
+                try:
+                    cpa_row_after_sync = con.execute(
                         "SELECT key_alias, is_deleted FROM cpa_api_keys WHERE api_key = ?",
                         (key,),
                     ).fetchone()
                 finally:
                     con.close()
                 picker = prompt_key_management_picker({}, "enable", chat_id="chat", user_id="user")
+                events = build_change_events(
+                    {key: {"alias": "hominhquang", "cpa_deleted": False, "in_quota": True, "in_proxy_config": True, "disabled_by_quota": False, "manually_disabled": False, "daily": 75_000_000, "weekly": 300_000_000}},
+                    {key: {"alias": "hominhquang", "cpa_deleted": False, "in_quota": True, "in_proxy_config": False, "disabled_by_quota": False, "manually_disabled": True, "daily": 75_000_000, "weekly": 300_000_000}},
+                )
 
         self.assertIsNone(disable_result)
         self.assertEqual([item["key"] for item in saved_quota["keys"]], [key])
         self.assertEqual(saved_state.get("manually_disabled_keys"), [key])
-        self.assertEqual(cpa_row, ("hominhquang", 0))
+        self.assertEqual(cpa_row_after_disable, ("hominhquang", 0))
+        self.assertEqual(sync_changed, 1)
+        self.assertEqual(cpa_row_after_sync, ("hominhquang", 0))
         self.assertIn("hominhquang", picker["text"] + str(picker["reply_markup"]))
         self.assertNotIn(key, str(picker["reply_markup"]))
+        self.assertEqual([event["logical_type"] for event in events], ["key_manually_disabled"])
 
     def test_delete_key_picker_keeps_active_and_disabled_quota_managed_keys(self):
         state = {}
@@ -3980,6 +4009,89 @@ class TelegramUxMessageTests(unittest.TestCase):
                 self.assertEqual(saved_state["manually_disabled_keys"], [])
                 self.assertEqual(saved_state["cpa_deleted_while_quota_disabled"], [])
                 self.assertEqual(saved_state["cpa_deleted_restore_pending"], [])
+
+    def test_key_delete_removes_quota_state_and_soft_deletes_cpa_row(self):
+        key = "delete-secret-key"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            config_path = base / "config.yaml"
+            state_path = base / "state.json"
+            db_path = base / "app.db"
+            quota_path.write_text(
+                json.dumps({
+                    "timezone": "Asia/Ho_Chi_Minh",
+                    "keys": [{"name": "delete-user", "key": key, "daily_token_limit": 1}],
+                }) + "\n",
+                encoding="utf-8",
+            )
+            config_path.write_text(f'api-keys:\n  - "{key}"\n', encoding="utf-8")
+            state_path.write_text(
+                json.dumps({
+                    "disabled_by_quota": [key],
+                    "manually_disabled_keys": [key],
+                    "cpa_deleted_while_quota_disabled": [key],
+                    "cpa_deleted_restore_pending": [key],
+                }) + "\n",
+                encoding="utf-8",
+            )
+            con = sqlite3.connect(db_path)
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE cpa_api_keys (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        api_key TEXT UNIQUE,
+                        display_key TEXT,
+                        key_alias TEXT,
+                        is_deleted INTEGER DEFAULT 0,
+                        last_synced_at TEXT,
+                        created_at TEXT,
+                        updated_at TEXT
+                    )
+                    """
+                )
+                con.execute(
+                    """
+                    INSERT INTO cpa_api_keys
+                      (api_key, display_key, key_alias, is_deleted, last_synced_at, created_at, updated_at)
+                    VALUES (?, 'display', 'delete-user', 0, 'old', 'old', 'old')
+                    """,
+                    (key,),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            with mock.patch.object(actions_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(actions_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(actions_module, "backup_action_files"), \
+                 mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "USAGE_DB", db_path):
+                result = execute_key_management("key_delete", {"key": key, "alias": "delete-user"})
+
+            saved_quota = json.loads(quota_path.read_text(encoding="utf-8"))
+            saved_state = json.loads(state_path.read_text(encoding="utf-8"))
+            con = sqlite3.connect(db_path)
+            try:
+                cpa_deleted = con.execute(
+                    "SELECT is_deleted FROM cpa_api_keys WHERE api_key = ?",
+                    (key,),
+                ).fetchone()[0]
+            finally:
+                con.close()
+            config_keys = quota_config_module.parse_api_keys_block(config_path.read_text(encoding="utf-8"))
+
+        self.assertIsNone(result)
+        self.assertEqual(saved_quota["keys"], [])
+        self.assertEqual(saved_state.get("disabled_by_quota"), [])
+        self.assertEqual(saved_state.get("manually_disabled_keys"), [])
+        self.assertEqual(saved_state.get("cpa_deleted_while_quota_disabled"), [])
+        self.assertEqual(saved_state.get("cpa_deleted_restore_pending"), [])
+        self.assertEqual(config_keys, [])
+        self.assertEqual(cpa_deleted, 1)
 
     def test_simple_quota_button_uses_cached_snapshot_not_live_refresh(self):
         state = {"snapshot": {"created_at": 1, "quota_error": "", "quota_rows": []}}

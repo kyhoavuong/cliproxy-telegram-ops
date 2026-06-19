@@ -535,10 +535,9 @@ def sync_cpa_registry_from_quotas():
             ).fetchone()
             if row:
                 row_is_deleted = bool(row[3])
-                if row_is_deleted and key in manual_disabled:
-                    continue
                 protected_deleted_key = (
                     key in disabled_by_quota
+                    or key in manual_disabled
                     or key in protected_tombstone_keys
                     or (proxy_config_available and key in proxy_config_keys)
                 )
@@ -566,8 +565,6 @@ def sync_cpa_registry_from_quotas():
                 )
                 changed += max(0, cursor.rowcount or 0)
             else:
-                if key in manual_disabled:
-                    continue
                 alias = quota_alias or key[:8]
                 con.execute(
                     """

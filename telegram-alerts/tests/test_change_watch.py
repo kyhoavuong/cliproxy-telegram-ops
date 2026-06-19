@@ -389,7 +389,7 @@ class CpaRegistrySyncTests(unittest.TestCase):
         self.assertEqual([account["key"] for account in picker_accounts], ["test-key-disabled"])
         self.assertEqual(usage_count, 1)
 
-    def test_manually_disabled_quota_managed_deleted_cpa_row_stays_deleted(self):
+    def test_manually_disabled_quota_managed_deleted_cpa_row_is_reactivated(self):
         changed, rows, alias_map, picker_accounts, usage_count = self.run_sync(
             quota_keys=[{"name": "Manual Alias", "key": "test-key-manual", "daily_token_limit": 1000}],
             proxy_keys=[],
@@ -398,16 +398,17 @@ class CpaRegistrySyncTests(unittest.TestCase):
             state_payload={"manually_disabled_keys": ["test-key-manual"]},
         )
 
-        self.assertEqual(changed, 0)
+        self.assertEqual(changed, 1)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["is_deleted"], 1)
-        self.assertEqual(rows[0]["key_alias"], "Old Alias")
-        self.assertEqual(rows[0]["display_key"], "old-display")
-        self.assertNotIn("test-key-manual", alias_map)
-        self.assertEqual(picker_accounts, [])
+        self.assertEqual(rows[0]["is_deleted"], 0)
+        self.assertEqual(rows[0]["key_alias"], "Manual Alias")
+        self.assertNotEqual(rows[0]["display_key"], "old-display")
+        self.assertIn("test-key-manual", alias_map)
+        self.assertEqual(alias_map["test-key-manual"], "Manual Alias")
+        self.assertEqual([account["key"] for account in picker_accounts], ["test-key-manual"])
         self.assertEqual(usage_count, 1)
 
-    def test_manually_disabled_quota_managed_missing_cpa_row_is_not_created(self):
+    def test_manually_disabled_quota_managed_missing_cpa_row_is_created(self):
         changed, rows, alias_map, picker_accounts, usage_count = self.run_sync(
             quota_keys=[{"name": "Manual Alias", "key": "test-key-manual", "daily_token_limit": 1000}],
             proxy_keys=[],
@@ -416,8 +417,13 @@ class CpaRegistrySyncTests(unittest.TestCase):
             state_payload={"manually_disabled_keys": ["test-key-manual"]},
         )
 
-        self.assertEqual(changed, 0)
-        self.assertEqual(rows, [])
+        self.assertEqual(changed, 1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["api_key"], "test-key-manual")
+        self.assertEqual(rows[0]["is_deleted"], 0)
+        self.assertEqual(rows[0]["key_alias"], "Manual Alias")
+        self.assertEqual(alias_map["test-key-manual"], "Manual Alias")
+        self.assertEqual([account["key"] for account in picker_accounts], ["test-key-manual"])
         self.assertEqual(usage_count, 0)
 
     def test_protected_quota_disabled_tombstone_in_quota_is_reactivated(self):
@@ -1275,6 +1281,14 @@ class ChangeWatchNotificationTests(unittest.TestCase):
 
         self.assertEqual(sent, 0)
         self.assertEqual(messages, [])
+
+    def test_manual_disabled_cpa_reactivation_does_not_report_created_or_enabled(self):
+        deleted_tail = {"key-1": api_record(alias="kieuoanh", cpa_deleted=True, in_quota=True, in_proxy_config=False, manually_disabled=True)}
+        reactivated_tail = {"key-1": api_record(alias="kieuoanh", cpa_deleted=False, in_quota=True, in_proxy_config=False, manually_disabled=True)}
+
+        events = build_change_events(deleted_tail, reactivated_tail)
+
+        self.assertEqual(events, [])
 
     def test_manual_disable_notification_has_no_buttons(self):
         active = {"key-1": api_record(alias="kieuoanh", cpa_deleted=False, in_quota=True, in_proxy_config=True, manually_disabled=False)}
