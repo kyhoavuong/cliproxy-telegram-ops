@@ -133,7 +133,8 @@ def change_watch_snapshot() -> dict[str, dict[str, Any]]:
         record.setdefault("in_quota", False)
         record.setdefault("in_proxy_config", False)
         record["disabled_by_quota"] = key in disabled_keys
-        record["manually_disabled"] = key in manually_disabled_keys and key not in proxy_keys
+        record["manual_marker"] = key in manually_disabled_keys
+        record["manually_disabled"] = record["manual_marker"] and key not in proxy_keys
         record["cpa_deleted_while_quota_disabled"] = key in protected_cpa_tombstones
         record.setdefault("daily", None)
         record.setdefault("weekly", "default")
@@ -359,6 +360,8 @@ def manual_key_state_transition(old, new):
         return ""
     if new_manually_disabled:
         return "disabled"
+    if new.get("manual_marker"):
+        return ""
     return "enabled"
 
 

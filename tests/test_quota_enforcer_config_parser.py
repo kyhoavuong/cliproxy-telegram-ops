@@ -362,6 +362,36 @@ class QuotaEnforcerConfigParserTests(unittest.TestCase):
         self.assertEqual(state.get("disabled_by_quota"), [])
         self.assertEqual(config_keys, ["recovered-key"])
 
+    def test_main_does_not_restore_manually_disabled_key_even_when_quota_available(self):
+        key = "nguyenlehung-test-key"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            quota_path = tmp_path / "quotas.json"
+            config_path = tmp_path / "config.yaml"
+            state_path = tmp_path / "state.json"
+            lock_path = tmp_path / "quota.lock"
+            self.write_quota_file(quota_path, [{"name": "nguyenlehung", "key": key, "daily_token_limit": 80_000_000}])
+            config_path.write_text("api-keys: []\n", encoding="utf-8")
+            state_path.write_text(json.dumps({"disabled_by_quota": [], "manually_disabled_keys": [key]}), encoding="utf-8")
+
+            with mock.patch.object(self.module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(self.module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(self.module, "STATE_FILE", state_path), \
+                 mock.patch.object(self.module, "LOCK_FILE", lock_path), \
+                 mock.patch.object(self.module, "CLIPROXY_MANAGEMENT_TOKEN", ""), \
+                 mock.patch.object(self.module, "get_usage_by_key", return_value={key: {"today_tokens": 3_856_132, "week_tokens": 104_909_019, "requests_today": 20}}), \
+                 mock.patch.object(self.module, "sys") as sys_mock:
+                sys_mock.argv = ["quota_enforcer.py"]
+                self.assertEqual(self.module.main(), 0)
+                saved = json.loads(quota_path.read_text(encoding="utf-8"))
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                _, _, _, config_keys = self.module.parse_api_keys_block(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual([item["key"] for item in saved["keys"]], [key])
+        self.assertEqual(config_keys, [])
+        self.assertEqual(state.get("disabled_by_quota"), [])
+        self.assertEqual(state.get("manually_disabled_keys"), [key])
+
     def test_missing_weekly_limit_defaults_to_four_times_daily(self):
         with tempfile.TemporaryDirectory() as tmp:
             quota_path = Path(tmp) / "quotas.json"

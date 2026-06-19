@@ -1689,6 +1689,9 @@ def collect_alerts(http_results: list[dict[str, Any]] | None | object = _UNSET, 
 def severity_icon(severity):
     return {"critical": "[CRITICAL]", "warning": "[WARN]", "info": "[INFO]"}.get(severity, "[ALERT]")
 
+def resolved_icon():
+    return "[RESOLVED]"
+
 def alert_impact_and_action(alert):
     alert_id = str(alert.alert_id or "")
     if alert_id == "service:cliproxy":
@@ -1739,6 +1742,10 @@ def alert_impact_and_action(alert):
 
 def alert_display_title(alert):
     alert_id = str(alert.alert_id or "")
+    if alert_id == "service:cliproxy":
+        return "Cliproxy is not reachable" if alert.fingerprint == "unreachable" else str(alert.title or "")
+    if alert_id == "service:usage-keeper":
+        return "Usage-keeper is not reachable" if alert.fingerprint == "unreachable" else str(alert.title or "")
     if alert_id == "capacity:gpt-pool-5h-low":
         return "GPT pool 5h capacity low"
     if alert_id == "auth:quota-inspection-unavailable":
@@ -1746,6 +1753,16 @@ def alert_display_title(alert):
     if alert_id == "auth:quota-inspection-failed":
         return str(alert.title or "Proxy accounts need reauth")
     return str(alert.title or "")
+
+
+def alert_evidence(alert):
+    alert_id = str(alert.alert_id or "")
+    if alert.fingerprint == "unreachable":
+        if alert_id == "service:cliproxy":
+            return "http://cliproxy:3000/healthz failed"
+        if alert_id == "service:usage-keeper":
+            return "http://usage-keeper:8080/usage/healthz failed"
+    return str(alert.body or "No additional evidence was included.")
 
 
 def normalize_reauth_render_detail(detail):
@@ -1833,7 +1850,7 @@ def build_alert_message(alert):
             f"{severity_icon(alert.severity)} {alert_display_title(alert)}",
             "",
             "Evidence:",
-            str(alert.body or "No additional evidence was included."),
+            alert_evidence(alert),
             "",
             "Action:",
             compact_actions[alert_id],
@@ -1847,7 +1864,7 @@ def build_alert_message(alert):
         impact,
         "",
         "Evidence:",
-        str(alert.body or "No additional evidence was included."),
+        alert_evidence(alert),
         "",
         "Action:",
         action,
@@ -1864,7 +1881,7 @@ def build_resolved_message(alert_id, old):
                 if label not in labels:
                     labels.append(label)
         lines = [
-            "[OK] Proxy accounts reauth",
+            f"{resolved_icon()} Proxy accounts reauth",
             "",
         ]
         if labels:
@@ -1877,16 +1894,28 @@ def build_resolved_message(alert_id, old):
         return "\n".join(lines)
     if alert_id == "capacity:gpt-pool-5h-low":
         return "\n".join([
-            "[OK] GPT Pool 5h Capacity",
+            f"{resolved_icon()} GPT Pool 5h Capacity",
             "",
             "Recovered: 5h GPT pool margin is back above the recovery threshold."
         ])
     if alert_id == "auth:quota-inspection-unavailable":
         return "\n".join([
-            "[OK] Proxy Auth Inspection Unavailable",
+            f"{resolved_icon()} Proxy Auth Inspection Unavailable",
             "",
             "Recovered from previous warning alert.",
         ])
+    if alert_id == "service:cliproxy":
+        return "\n".join([
+            f"{resolved_icon()} Cliproxy is not reachable",
+            "",
+            "Recovered from previous critical alert.",
+        ])
+    if alert_id == "service:usage-keeper":
+        return "\n".join([
+            f"{resolved_icon()} Usage-keeper is not reachable",
+            "",
+            "Recovered from previous critical alert.",
+        ])
     title = old.get("title", alert_id)
     severity = old.get("severity", "info")
-    return f"[OK] {ALERT_HOSTNAME}: {title}\n\nRecovered from previous {severity} alert."
+    return f"{resolved_icon()} {ALERT_HOSTNAME}: {title}\n\nRecovered from previous {severity} alert."

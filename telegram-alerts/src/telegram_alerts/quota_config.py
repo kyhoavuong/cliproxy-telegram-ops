@@ -497,7 +497,7 @@ def sync_cpa_registry_from_quotas():
         return 0
     quota_aliases = quota_managed_aliases()
     disabled_by_quota = quota_disabled_keys()
-    manual_disabled = manually_disabled_keys()
+    manual_disabled_markers = manually_disabled_keys()
     protected_tombstone_keys = quota_disabled_cpa_tombstone_keys()
     proxy_config_keys = set()
     proxy_config_available = False
@@ -513,6 +513,11 @@ def sync_cpa_registry_from_quotas():
             log("skipping CPA registry soft-delete sync: proxy config unavailable")
     except Exception as exc:
         log(f"skipping CPA registry soft-delete sync: proxy config unavailable: {exc.__class__.__name__}")
+
+    if proxy_config_available:
+        manual_disabled = {key for key in manual_disabled_markers if key not in proxy_config_keys}
+    else:
+        manual_disabled = manual_disabled_markers
 
     now = cpa_now()
     changed = 0
@@ -530,9 +535,10 @@ def sync_cpa_registry_from_quotas():
             ).fetchone()
             if row:
                 row_is_deleted = bool(row[3])
+                if row_is_deleted and key in manual_disabled:
+                    continue
                 protected_deleted_key = (
                     key in disabled_by_quota
-                    or key in manual_disabled
                     or key in protected_tombstone_keys
                     or (proxy_config_available and key in proxy_config_keys)
                 )
@@ -560,6 +566,8 @@ def sync_cpa_registry_from_quotas():
                 )
                 changed += max(0, cursor.rowcount or 0)
             else:
+                if key in manual_disabled:
+                    continue
                 alias = quota_alias or key[:8]
                 con.execute(
                     """

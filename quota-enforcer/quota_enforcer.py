@@ -13,7 +13,7 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-BASE_DIR = Path(os.environ.get("CLIPROXY_BASE_DIR", "/opt/cliproxy"))
+BASE_DIR = Path("/srv/personal/cliproxy")
 ENV_FILE = BASE_DIR / ".env"
 
 
@@ -1294,6 +1294,8 @@ def main():
             log("no limited keys configured; nothing to enforce")
             return 0
 
+        previous_state = load_quota_state()
+        manually_disabled_limited_keys = active_manually_disabled_keys(previous_state)
         usage = get_usage_by_key(limited_items, tz_name)
 
         active_limited_keys = []
@@ -1313,8 +1315,20 @@ def main():
 
             over_daily = daily_limit is not None and today_used >= daily_limit
             over_weekly = weekly_limit is not None and week_used >= weekly_limit
+            manually_disabled = key in manually_disabled_limited_keys
+            disabled_by_quota = False
 
-            if daily_limit is None and weekly_limit is None:
+            if manually_disabled:
+                active = False
+                if over_daily or over_weekly:
+                    disabled_by_quota = True
+                    reason = "daily" if over_daily else "weekly"
+                    if over_daily and over_weekly:
+                        reason = "daily+weekly"
+                    status = quota_status_text(f"manually_disabled+quota_{reason}", today_used, daily_limit, week_used, weekly_limit)
+                else:
+                    status = quota_status_text("manually_disabled", today_used, daily_limit, week_used, weekly_limit)
+            elif daily_limit is None and weekly_limit is None:
                 active = True
                 status = "unlimited"
             elif not over_daily and not over_weekly:
@@ -1322,6 +1336,7 @@ def main():
                 status = quota_status_text("active", today_used, daily_limit, week_used, weekly_limit)
             else:
                 active = False
+                disabled_by_quota = True
                 reason = "daily" if over_daily else "weekly"
                 if over_daily and over_weekly:
                     reason = "daily+weekly"
@@ -1331,13 +1346,12 @@ def main():
 
             if active:
                 active_limited_keys.append(key)
-            else:
+            if disabled_by_quota:
                 disabled_limited_keys.append(key)
 
         if dry_run:
             log("dry_run=true, not modifying config.yaml api-keys or state.json")
         else:
-            previous_state = load_quota_state()
             previously_disabled_by_quota = quota_state_key_set(previous_state, "disabled_by_quota")
             pending_restore_tombstones = quota_state_key_set(previous_state, CPA_DELETED_RESTORE_PENDING_KEY)
             state = dict(dict_or_empty(previous_state))

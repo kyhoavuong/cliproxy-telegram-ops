@@ -2195,7 +2195,7 @@ class AuthReauthAlertTests(unittest.TestCase):
             handlers.process_alerts({}, state, auth_quota_observation=auth_observation(healthy=["acct-a"]))
 
         self.assertEqual(len(sent), 1)
-        self.assertNotIn("[OK]", "\n".join(sent))
+        self.assertNotIn("[RESOLVED]", "\n".join(sent))
         self.assertIn("auth:quota-inspection-unavailable", state.get("active", {}))
 
     def test_active_inspection_unavailable_complete_for_recovery_window_sends_one_ok(self):
@@ -2215,7 +2215,7 @@ class AuthReauthAlertTests(unittest.TestCase):
 
         self.assertEqual(len(sent), 2)
         self.assertIn("Proxy Auth Inspection Unavailable", sent[0])
-        self.assertIn("[OK]", sent[1])
+        self.assertIn("[RESOLVED]", sent[1])
         self.assertNotIn("auth:quota-inspection-unavailable", state.get("active", {}))
 
     def test_inspection_unavailable_recurrence_during_recovery_window_resets_ok_timer(self):
@@ -2235,7 +2235,7 @@ class AuthReauthAlertTests(unittest.TestCase):
             handlers.process_alerts({}, state, auth_quota_observation=auth_observation(healthy=["acct-a"]))
 
         self.assertEqual(len(sent), 1)
-        self.assertNotIn("[OK]", "\n".join(sent))
+        self.assertNotIn("[RESOLVED]", "\n".join(sent))
         self.assertIn("auth:quota-inspection-unavailable", state.get("active", {}))
 
     def test_reauth_recovery_does_not_send_ok_when_previous_account_is_omitted(self):
@@ -2329,6 +2329,14 @@ class AuthReauthAlertTests(unittest.TestCase):
     def test_auto_alert_message_title_lines_are_standardized(self):
         cases = [
             (
+                Alert("service:cliproxy", "critical", "cliproxy is not reachable", "http://cliproxy:3000/healthz failed: timed out", "unreachable"),
+                "[CRITICAL] Cliproxy is not reachable",
+            ),
+            (
+                Alert("service:usage-keeper", "critical", "usage-keeper is not reachable", "http://usage-keeper:8080/usage/healthz failed: timed out", "unreachable"),
+                "[CRITICAL] Usage-keeper is not reachable",
+            ),
+            (
                 Alert("capacity:gpt-pool-5h-low", "warning", "GPT pool 5h capacity low", "5h margin: 0.7x", "margin:0.7"),
                 "[WARN] GPT pool 5h capacity low",
             ),
@@ -2353,14 +2361,53 @@ class AuthReauthAlertTests(unittest.TestCase):
                 self.assertIn("Action:", text)
                 self.assertNotIn("---", text)
 
+    def test_service_unreachable_alert_copy_matches_operator_template(self):
+        cases = [
+            (
+                Alert("service:cliproxy", "critical", "cliproxy is not reachable", "http://cliproxy:3000/healthz failed: timed out", "unreachable"),
+                "[CRITICAL] Cliproxy is not reachable\n\n"
+                "Impact:\n"
+                "API requests may fail or return errors.\n\n"
+                "Evidence:\n"
+                "http://cliproxy:3000/healthz failed\n\n"
+                "Action:\n"
+                "Check docker compose ps, cliproxy logs, and recent config changes.",
+            ),
+            (
+                Alert("service:usage-keeper", "critical", "usage-keeper is not reachable", "http://usage-keeper:8080/usage/healthz failed: timed out", "unreachable"),
+                "[CRITICAL] Usage-keeper is not reachable\n\n"
+                "Impact:\n"
+                "Usage dashboard and Telegram usage summaries may be stale or unavailable.\n\n"
+                "Evidence:\n"
+                "http://usage-keeper:8080/usage/healthz failed\n\n"
+                "Action:\n"
+                "Check docker compose ps and usage-keeper logs.",
+            ),
+        ]
+        for alert, expected in cases:
+            with self.subTest(alert_id=alert.alert_id):
+                self.assertEqual(build_alert_message(alert), expected)
+
     def test_resolved_alert_message_title_lines_are_standardized(self):
         self.assertEqual(
             build_resolved_message("capacity:gpt-pool-5h-low", {"title": "GPT pool 5h capacity low", "severity": "warning"}).splitlines()[0],
-            "[OK] GPT Pool 5h Capacity",
+            "[RESOLVED] GPT Pool 5h Capacity",
         )
         self.assertEqual(
             build_resolved_message("auth:quota-inspection-unavailable", {"title": "Proxy auth inspection unavailable", "severity": "warning"}).splitlines()[0],
-            "[OK] Proxy Auth Inspection Unavailable",
+            "[RESOLVED] Proxy Auth Inspection Unavailable",
+        )
+
+    def test_service_unreachable_resolved_copy_matches_operator_template(self):
+        self.assertEqual(
+            build_resolved_message("service:cliproxy", {"title": "cliproxy is not reachable", "severity": "critical"}),
+            "[RESOLVED] Cliproxy is not reachable\n\n"
+            "Recovered from previous critical alert.",
+        )
+        self.assertEqual(
+            build_resolved_message("service:usage-keeper", {"title": "usage-keeper is not reachable", "severity": "critical"}),
+            "[RESOLVED] Usage-keeper is not reachable\n\n"
+            "Recovered from previous critical alert.",
         )
 
     def test_gpt_low_capacity_recovery_copy_is_specific(self):
@@ -2368,7 +2415,7 @@ class AuthReauthAlertTests(unittest.TestCase):
 
         self.assertEqual(
             text,
-            "[OK] GPT Pool 5h Capacity\n\n"
+            "[RESOLVED] GPT Pool 5h Capacity\n\n"
             "Recovered: 5h GPT pool margin is back above the recovery threshold.",
         )
         self.assertNotIn("---", text)
@@ -2385,7 +2432,7 @@ class AuthReauthAlertTests(unittest.TestCase):
 
         self.assertEqual(
             text,
-            "[OK] Proxy accounts reauth\n\n"
+            "[RESOLVED] Proxy accounts reauth\n\n"
             "Recovered:\n"
             "- codex-account-a@example.com\n"
             "- codex-account-d@example.com\n\n"
@@ -2410,9 +2457,9 @@ class AuthReauthAlertTests(unittest.TestCase):
             handlers.process_alerts({alert.alert_id: alert}, state)
 
         self.assertEqual(len(sent), 3)
-        self.assertIn("cliproxy is not reachable", sent[0])
-        self.assertIn("[OK]", sent[1])
-        self.assertIn("cliproxy is not reachable", sent[2])
+        self.assertIn("Cliproxy is not reachable", sent[0])
+        self.assertIn("[RESOLVED]", sent[1])
+        self.assertIn("Cliproxy is not reachable", sent[2])
 
     def test_incident_changed_fingerprint_notifies_while_active(self):
         state = {}
@@ -2427,7 +2474,7 @@ class AuthReauthAlertTests(unittest.TestCase):
             handlers.process_alerts({changed.alert_id: changed}, state)
 
         self.assertEqual(len(sent), 2)
-        self.assertIn("connect failed", sent[0])
+        self.assertIn("http://cliproxy:3000/healthz failed", sent[0])
         self.assertIn("HTTP 500", sent[1])
 
     def test_send_auto_alert_ignores_removed_silence_state(self):
@@ -2453,7 +2500,7 @@ class AuthReauthAlertTests(unittest.TestCase):
             handlers.process_alerts({alert.alert_id: alert}, state)
 
         self.assertEqual(len(sent), 1)
-        self.assertIn("cliproxy is not reachable", sent[0])
+        self.assertIn("Cliproxy is not reachable", sent[0])
 
     def test_quota_inspection_unavailable_fingerprint_is_normalized_for_equivalent_timeouts(self):
         first = quota_inspection_unavailable_alert(TimeoutError("timed out after 8 seconds"))
