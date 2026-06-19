@@ -8,6 +8,20 @@ This project follows a lightweight release format inspired by Keep a Changelog a
 
 No unreleased changes yet.
 
+## [0.2.3] - 2026-06-19
+
+### Changed
+
+- Updated the portable stack to CLIProxyAPI v7.2.19 and CPA Usage Keeper v1.11.1.
+- Standardized recovery notifications to use `[RESOLVED]` and clearer service health alert templates.
+
+### Fixed
+
+- Kept manually disabled keys disabled across quota-enforcer, CPA registry sync, and change-watch reconciliation.
+- Prevented stale manual-disable markers from emitting false key enabled or key created notifications.
+- Preserved manually disabled CPA rows instead of reactivating or recreating them during sync.
+- Tuned quota inspection compatibility with newer Usage Keeper responses that include inactive or unknown rows.
+
 ## [0.2.2] - 2026-06-17
 
 ### Fixed
@@ -47,7 +61,8 @@ No unreleased changes yet.
 - Telegram alert, operator workflow, quota-management, and change-watch test coverage.
 - Public Docker quickstart, security policy, contribution guide, and architecture documentation.
 
-[Unreleased]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.2.1
 [0.2.0]: https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.2.0
