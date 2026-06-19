@@ -59,8 +59,8 @@ ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:v0.2.2
 The compose file also uses upstream images:
 
 ```text
-eceasy/cli-proxy-api:v7.2.13
-ghcr.io/willxup/cpa-usage-keeper:v1.11.0
+eceasy/cli-proxy-api:v7.2.19
+ghcr.io/willxup/cpa-usage-keeper:v1.11.1
 cloudflare/cloudflared:latest
 ```
 

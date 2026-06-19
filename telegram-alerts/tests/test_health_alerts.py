@@ -78,6 +78,51 @@ def gpt_observation(complete=True, margin=None, low=False, recovered=False, reas
 
 
 class QuotaInspectionPayloadRefreshTests(unittest.TestCase):
+    def test_count_mismatch_is_complete_when_active_codex_identities_are_fully_observed(self):
+        calls = []
+        rows = [
+            auth_item(name=f"active-{idx}", status="normal", auth_index=f"codex-{idx}")
+            for idx in range(1, 22)
+        ]
+        active_complete_with_inactive_total = {
+            **inspection_payload_with_total(rows, running=False, completed=False, total=26),
+            "cached": 21,
+            "normal": 21,
+            "unknown": 5,
+        }
+        inspection_responses = [
+            active_complete_with_inactive_total,
+            active_complete_with_inactive_total,
+        ]
+
+        def fake_request(path, method="GET", payload=None, cookie=None):
+            calls.append((path, method, payload))
+            if path == "auth/login":
+                return 200, {}, "session=abc; Path=/"
+            if path == "quota/inspection":
+                return 200, inspection_responses.pop(0), ""
+            if path.startswith("usage/identities/page"):
+                self.assertIn("active_only=true", path)
+                return 200, {
+                    "items": [
+                        {"auth_index": f"codex-{idx}", "type": "codex"}
+                        for idx in range(1, 22)
+                    ],
+                    "totalPages": 1,
+                }, ""
+            if path == "quota/refresh":
+                self.assertEqual(payload, {"auth_indexes": [f"codex-{idx}" for idx in range(1, 22)]})
+                return 200, {"queued": 21}, ""
+            raise AssertionError(f"unexpected request {path}")
+
+        with mock.patch("telegram_alerts.health.USAGE_KEEPER_PASSWORD", "password"), \
+             mock.patch("telegram_alerts.health.usage_keeper_request", side_effect=fake_request), \
+             mock.patch.object(health.time, "sleep"):
+            data = quota_inspection_payload(refresh_before_check=True, wait_for_refresh=True, wait_seconds=0)
+
+        self.assertEqual(health.auth_quota_incomplete_reason(data), "")
+        self.assertNotIn("active_only=false", repr(calls))
+
     def test_count_mismatch_refreshes_all_known_codex_identities_from_inactive_identity_list(self):
         calls = []
         incomplete = inspection_payload_with_total(

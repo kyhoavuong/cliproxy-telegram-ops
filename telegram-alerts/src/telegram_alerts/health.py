@@ -901,6 +901,7 @@ def gpt_pool_capacity_snapshot_with_recent_cache(recent_cache=None, cache_now=No
 
 
 AUTH_INSPECTION_IDENTITY_FALLBACK_REASONS = {"count-mismatch", "results-none", "results-missing"}
+ACTIVE_IDENTITY_COMPLETE_MARKER = "_cliproxy_active_identity_complete"
 
 
 def dedupe_auth_indexes(values):
@@ -924,9 +925,46 @@ def inspection_result_auth_indexes(data):
     )
 
 
+def active_identity_complete_inspection(data, cookie):
+    if not isinstance(data, dict):
+        return data
+    if data.get(ACTIVE_IDENTITY_COMPLETE_MARKER):
+        return data
+    if auth_quota_incomplete_reason(data) != "count-mismatch":
+        return data
+    try:
+        unknown_count = int(data.get("unknown") or 0)
+    except (TypeError, ValueError):
+        unknown_count = 0
+    if unknown_count <= 0:
+        return data
+    result_indexes = inspection_result_auth_indexes(data)
+    if not result_indexes:
+        return data
+    active_indexes = dedupe_auth_indexes(
+        identity_quota_cache_index(item)
+        for item in enabled_codex_auth_items(cookie)
+        if identity_quota_cache_index(item)
+    )
+    if active_indexes and set(active_indexes) == set(result_indexes):
+        normalized = dict(data)
+        normalized[ACTIVE_IDENTITY_COMPLETE_MARKER] = True
+        normalized["_cliproxy_active_identity_count"] = len(active_indexes)
+        return normalized
+    return data
+
+
 def quota_refresh_auth_indexes(data, cookie):
     auth_indexes = inspection_result_auth_indexes(data)
     reason = auth_quota_incomplete_reason(data)
+    if reason == "count-mismatch":
+        active_indexes = dedupe_auth_indexes(
+            identity_quota_cache_index(item)
+            for item in enabled_codex_auth_items(cookie)
+            if identity_quota_cache_index(item)
+        )
+        if active_indexes:
+            return active_indexes
     if reason in AUTH_INSPECTION_IDENTITY_FALLBACK_REASONS:
         fallback_indexes = all_known_codex_auth_indexes(cookie)
         if fallback_indexes:
@@ -950,6 +988,7 @@ def quota_inspection_payload(refresh_before_check: bool | None = None, wait_for_
     _, data, _ = usage_keeper_request("quota/inspection", cookie=cookie)
     if not isinstance(data, dict):
         raise RuntimeError("quota inspection response is not an object")
+    data = active_identity_complete_inspection(data, cookie)
 
     if refresh_before_check:
         auth_indexes = quota_refresh_auth_indexes(data, cookie)
@@ -966,6 +1005,7 @@ def quota_inspection_payload(refresh_before_check: bool | None = None, wait_for_
                     while True:
                         time.sleep(1)
                         _, data, _ = usage_keeper_request("quota/inspection", cookie=cookie)
+                        data = active_identity_complete_inspection(data, cookie)
                         if not isinstance(data, dict) or not auth_quota_incomplete_reason(data):
                             break
                         if time.monotonic() >= deadline:
@@ -1321,6 +1361,8 @@ def auth_quota_incomplete_reason(data):
         return "malformed-payload"
     if data.get("running"):
         return "refresh-running"
+    if data.get(ACTIVE_IDENTITY_COMPLETE_MARKER):
+        return ""
     for key, reason in (
         ("partial", "partial"),
         ("incomplete", "partial"),

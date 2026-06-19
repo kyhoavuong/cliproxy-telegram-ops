@@ -1,6 +1,6 @@
 services:
   cliproxy:
-    image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:v7.2.13}
+    image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:v7.2.19}
     container_name: cliproxy
     restart: unless-stopped
     environment:
@@ -15,7 +15,7 @@ services:
       - cliproxy
 
   usage-keeper:
-    image: ${USAGE_KEEPER_IMAGE:-ghcr.io/willxup/cpa-usage-keeper:v1.11.0}
+    image: ${USAGE_KEEPER_IMAGE:-ghcr.io/willxup/cpa-usage-keeper:v1.11.1}
     container_name: cpa-usage-keeper
     restart: unless-stopped
     environment:
