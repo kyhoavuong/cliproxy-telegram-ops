@@ -8,6 +8,37 @@ This project follows a lightweight release format inspired by Keep a Changelog a
 
 No unreleased changes yet.
 
+## [0.2.6] - 2026-06-24
+
+### Changed
+
+- Updated portable examples to CLIProxyAPI v7.2.33-amd64 and CPA Usage Keeper v1.12.0.
+
+### Fixed
+
+- Bound Telegram key disable/enable/delete confirmations to the scoped chat, user, action type, target key fingerprint, and pending action timestamp.
+- Cleared stale key-management confirmations when operators reopen key workflows, preventing old Confirm buttons from mutating the wrong key later.
+- Recorded secret-safe operator attribution and key fingerprints in action audit entries.
+
+## [0.2.5] - 2026-06-19
+
+### Changed
+
+- Published the v0.2.5 public helper image tags.
+- Updated portable examples to CLIProxyAPI v7.2.22.
+
+## [0.2.4] - 2026-06-19
+
+### Changed
+
+- Published the v0.2.4 public helper image tags.
+
+### Fixed
+
+- Added post-mutation verification warnings for Telegram key/quota actions while keeping successful replies unchanged.
+- Normalized provider labels for Codex, Antigravity, and unknown proxy-account notifications.
+- Kept manually disabled keys visible in the Usage Keeper registry without reactivating them in proxy config.
+
 ## [0.2.3] - 2026-06-19
 
 ### Changed
@@ -61,7 +92,10 @@ No unreleased changes yet.
 - Telegram alert, operator workflow, quota-management, and change-watch test coverage.
 - Public Docker quickstart, security policy, contribution guide, and architecture documentation.
 
-[Unreleased]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/kyhoavuong/cliproxy-telegram-ops/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.2.1

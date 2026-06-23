@@ -52,8 +52,8 @@ GitHub Actions publishes helper images to GHCR:
 ```text
 ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:latest
 ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:latest
-ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:v0.2.5
-ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:v0.2.5
+ghcr.io/kyhoavuong/cliproxy-telegram-ops-quota-gate:v0.2.6
+ghcr.io/kyhoavuong/cliproxy-telegram-ops-alerts:v0.2.6
 ```
 
 The compose file also uses upstream images:
@@ -66,7 +66,7 @@ cloudflare/cloudflared:latest
 
 ## Releases
 
-Stable release tags are published on GitHub and GHCR. See [v0.2.5](https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.2.5).
+Stable release tags are published on GitHub and GHCR. See [v0.2.6](https://github.com/kyhoavuong/cliproxy-telegram-ops/releases/tag/v0.2.6).
 
 ## Quickstart
 
