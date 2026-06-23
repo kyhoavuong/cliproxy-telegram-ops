@@ -1318,6 +1318,17 @@ class ChangeWatchNotificationTests(unittest.TestCase):
         self.assertEqual(sent, 1)
         self.assertEqual(messages, ["API key disabled\n\nUser: kieuoanh\nStatus: Disabled"])
 
+    def test_bot_confirmed_key_disable_fast_paths_with_secret_safe_key_ref_audit(self):
+        active = {"key-1": api_record(alias="kieuoanh", cpa_deleted=False, in_quota=True, in_proxy_config=True, manually_disabled=False)}
+        disabled = {"key-1": api_record(alias="kieuoanh", cpa_deleted=False, in_quota=True, in_proxy_config=False, manually_disabled=True)}
+        key_ref = hashlib.sha256(b"key-1").hexdigest()[:12]
+        state = {"action_audit": [{"type": "key_disable", "key_ref": key_ref, "at": 0}]}
+
+        sent, messages = collect_notification(active, disabled, state=state, now=1)
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(messages, ["API key disabled\n\nUser: kieuoanh\nStatus: Disabled"])
+
     def test_external_key_disable_still_waits_for_debounce(self):
         active = {"key-1": api_record(alias="kieuoanh", cpa_deleted=False, in_quota=True, in_proxy_config=True, manually_disabled=False)}
         disabled = {"key-1": api_record(alias="kieuoanh", cpa_deleted=False, in_quota=True, in_proxy_config=False, manually_disabled=True)}

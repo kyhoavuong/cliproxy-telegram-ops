@@ -7,7 +7,7 @@ from .mutation_verification import append_verification_warning, quota_marker_sna
 
 from .settings import API_PUBLIC_BASE_URL, CLIPROXY_CONFIG, PENDING_ACTION_TTL_SECONDS, QUOTA_STATE
 from .storage import load_json
-from .utils import log, log_timing, mask_key, monotonic_ms, msg, now_ts, short_code
+from .utils import key_ref, log, log_timing, mask_key, monotonic_ms, msg, now_ts, short_code
 from .keyboards import (
     button,
     inline_keyboard,
@@ -46,6 +46,9 @@ from .quota_config import (
 # Pending inputs/actions are scoped by chat and user so two authorized
 # operators can use the bot at the same time without stealing each other's
 # Confirm/Cancel buttons or typed replies.
+KEY_MANAGEMENT_ACTION_TYPES = {"key_disable", "key_enable", "key_delete"}
+
+
 def pending_scope(chat_id=None, user_id=None):
     return f"{chat_id or 'default'}:{user_id or 'default'}"
 
@@ -80,6 +83,47 @@ def cleanup_message_ids_from(value) -> list[int]:
     return ids
 
 
+def normalized_owner_value(value) -> str:
+    return str(value or "default")
+
+
+def key_management_confirm_token(code: str, action_type: str, key: str) -> str:
+    return f"{str(code or '').strip()}:{action_type}:{key_ref(key)}"
+
+
+def confirmation_token_for_pending(pending: dict[str, Any]) -> str:
+    token = pending.get("confirm_token") or pending.get("code")
+    return str(token or "").strip()
+
+
+def cancel_token_for_pending(pending: dict[str, Any]) -> str:
+    token = pending.get("cancel_token") or confirmation_token_for_pending(pending)
+    return str(token or "").strip()
+
+
+def key_management_pending_invalid(pending: dict[str, Any], chat_id=None, user_id=None) -> bool:
+    action_type = str(pending.get("type") or "")
+    if action_type not in KEY_MANAGEMENT_ACTION_TYPES:
+        return False
+    params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
+    key = str(params.get("key") or "").strip()
+    if not key:
+        return True
+    if str(pending.get("chat_id") or "") != normalized_owner_value(chat_id):
+        return True
+    if str(pending.get("user_id") or "") != normalized_owner_value(user_id):
+        return True
+    if not str(pending.get("action_id") or "").strip():
+        return True
+    if not str(pending.get("created_at") or "").strip():
+        return True
+    if str(pending.get("target_key_ref") or "") != key_ref(key):
+        return True
+    if confirmation_token_for_pending(pending) != key_management_confirm_token(pending.get("code"), action_type, key):
+        return True
+    return False
+
+
 def create_pending_action(
     state: dict[str, Any],
     action_type: str,
@@ -95,14 +139,32 @@ def create_pending_action(
     monitor state between polling ticks."""
     code = short_code()
     pending_actions, scope = scoped_pending_map(state, "pending_actions", "pending_action", chat_id, user_id)
+    created_at = now_ts()
     pending_action = {
         "code": code,
         "type": action_type,
         "params": params,
         "summary": summary,
-        "expires_at": now_ts() + PENDING_ACTION_TTL_SECONDS,
-        "created_at": now_ts(),
+        "expires_at": created_at + PENDING_ACTION_TTL_SECONDS,
+        "created_at": created_at,
     }
+    confirm_token = code
+    cancel_token = code
+    if action_type in KEY_MANAGEMENT_ACTION_TYPES:
+        key = str((params or {}).get("key") or "").strip()
+        alias = key_alias_for_message(params)
+        confirm_token = key_management_confirm_token(code, action_type, key)
+        cancel_token = confirm_token
+        pending_action.update({
+            "action_id": code,
+            "confirm_token": confirm_token,
+            "cancel_token": cancel_token,
+            "chat_id": normalized_owner_value(chat_id),
+            "user_id": normalized_owner_value(user_id),
+            "target_key_ref": key_ref(key),
+            "target_key_preview": mask_key(key),
+            "target_alias": alias,
+        })
     cleanup_ids = cleanup_message_ids_from(cleanup_message_ids)
     if cleanup_ids:
         pending_action["cleanup_message_ids"] = cleanup_ids
@@ -112,8 +174,8 @@ def create_pending_action(
         "",
         msg("confirm_hint"),
     ]), inline_keyboard([[
-        button(msg("cancel"), f"cancel:{code}"),
-        button(msg("confirm"), f"confirm:{code}"),
+        button(msg("cancel"), f"cancel:{cancel_token}"),
+        button(msg("confirm"), f"confirm:{confirm_token}"),
     ]]))
 
 def find_keys_by_exact_alias(alias):
@@ -624,7 +686,7 @@ def register_quota_same_key_edit(state: dict[str, Any], key: str, chat_id: str |
     return ref
 
 
-def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_id: str | None = None, user_id: str | None = None) -> TelegramReply | str | None:
+def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_id: str | None = None, user_id: str | None = None, telegram_username: str | None = None) -> TelegramReply | str | None:
     """Validate and execute the scoped pending action for a Confirm callback.
     
     Successful mutations invalidate the cached snapshot and keep duplicate Confirm
@@ -639,7 +701,10 @@ def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_
     if now_ts() > int(pending.get("expires_at", 0) or 0):
         pending_actions.pop(scope, None)
         return msg("expired")
-    if code is not None and str(code or "").strip() != str(pending.get("code", "")):
+    if key_management_pending_invalid(pending, chat_id=chat_id, user_id=user_id):
+        pending_actions.pop(scope, None)
+        return "This confirmation is no longer valid. Open Key Status again."
+    if code is not None and str(code or "").strip() != confirmation_token_for_pending(pending):
         return msg("invalid_code")
 
     action_type = pending.get("type")
@@ -689,26 +754,42 @@ def execute_pending_action(state: dict[str, Any], code: str | None = None, chat_
     cleanup_ids = cleanup_message_ids_from(pending.get("cleanup_message_ids"))
     if cleanup_ids and isinstance(result, dict):
         result["delete_message_ids"] = cleanup_ids
-    remember_completed_action(state, scope, pending.get("code"))
+    remember_completed_action(state, scope, confirmation_token_for_pending(pending))
     pending_actions.pop(scope, None)
     state.pop("snapshot", None)
     state["snapshot_invalidated_at"] = now_ts()
     state["snapshot_invalidated_reason"] = action_type
     if audit_action:
         audit = state.setdefault("action_audit", [])
+        confirmed_at = now_ts()
         audit_item = {
-            "at": now_ts(),
+            "at": confirmed_at,
+            "confirmed_at": confirmed_at,
             "type": action_type,
             "summary": pending.get("summary", ""),
+            "chat_id": str(chat_id or ""),
+            "telegram_user_id": str(user_id or ""),
+            "action_id": str(pending.get("action_id") or pending.get("code") or ""),
+            "pending_action_id": str(pending.get("action_id") or pending.get("code") or ""),
         }
-        # Keep an operator audit trail, but do not suppress change-watch notifications:
-        # bot-created keys and bot-edited quotas still need one automatic alert.
+        username = str(telegram_username or "").strip()
+        if username:
+            audit_item["telegram_username"] = username
+        target_alias = str(pending.get("target_alias") or params.get("alias") or "").strip()
+        if target_alias:
+            audit_item["target_alias"] = target_alias
         if changed_key and action_type in {"key_create", "quota_set", "key_disable", "key_enable", "key_delete"}:
-            audit_item["key"] = changed_key
+            audit_item["key_ref"] = key_ref(changed_key)
+            audit_item["target_key_preview"] = str(pending.get("target_key_preview") or mask_key(changed_key))
         audit.append(audit_item)
         del audit[:-20]
     log_timing("execute_pending_action", started, action=action_type)
     return result
+
+def clear_pending_action(state, chat_id=None, user_id=None):
+    pending_actions, scope = scoped_pending_map(state, "pending_actions", "pending_action", chat_id, user_id)
+    return bool(pending_actions.pop(scope, None))
+
 
 def clear_pending_input(state, chat_id=None, user_id=None):
     pending_inputs, scope = scoped_pending_map(state, "pending_inputs", "pending_input", chat_id, user_id)
@@ -720,7 +801,7 @@ def cancel_pending(state, code=None, input_only=False, chat_id=None, user_id=Non
         pending_actions, scope = scoped_pending_map(state, "pending_actions", "pending_action", chat_id, user_id)
         pending = pending_actions.get(scope)
         if isinstance(pending, dict):
-            if code is not None and str(code or "").strip() != str(pending.get("code", "")):
+            if code is not None and str(code or "").strip() != cancel_token_for_pending(pending):
                 return msg("confirm_mismatch")
             pending_actions.pop(scope, None)
             cancelled = True

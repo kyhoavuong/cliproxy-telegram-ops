@@ -84,6 +84,37 @@ def create_action_usage_db(path, *, rows=()):
         con.close()
 
 
+def test_key_ref(key):
+    import hashlib
+
+    return hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:12]
+
+
+def key_action_confirm_token(action_type, key, code="abc123"):
+    return f"{code}:{action_type}:{test_key_ref(key)}"
+
+
+def key_action_pending(action_type, key, alias, *, code="abc123", chat_id="chat", user_id="user"):
+    token = key_action_confirm_token(action_type, key, code=code)
+    action = action_type.removeprefix("key_")
+    return {
+        "code": code,
+        "confirm_token": token,
+        "cancel_token": token,
+        "action_id": code,
+        "type": action_type,
+        "params": {"key": key, "alias": alias},
+        "summary": f"Pending key {action}\n\nUser: {alias}\nKey preview: <masked>",
+        "expires_at": 99_999_999_999,
+        "created_at": 123,
+        "chat_id": str(chat_id),
+        "user_id": str(user_id),
+        "target_key_ref": test_key_ref(key),
+        "target_key_preview": "<masked>",
+        "target_alias": alias,
+    }
+
+
 class TelegramUxMessageTests(unittest.TestCase):
     def setUp(self):
         @contextmanager
@@ -3708,7 +3739,80 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertIn("pending_actions", state)
         self.assertEqual(state["pending_actions"]["chat:user"]["type"], "key_disable")
         self.assertEqual(state["pending_actions"]["chat:user"]["params"]["key"], "hung33-secret-7BfCD")
+        self.assertIn(test_key_ref("hung33-secret-7BfCD"), callbacks[0][1])
         execute.assert_not_called()
+
+    def test_stale_key_disable_confirm_is_invalidated_after_opening_new_disable_picker(self):
+        old_key = "old-disable-secret-key"
+        other_key = "other-active-secret-key"
+        state = {
+            "key_pickers": {
+                "chat:user": {
+                    "id": "oldpicker",
+                    "action": "disable",
+                    "keys": [old_key],
+                    "aliases": ["olduser"],
+                    "expires_at": 99_999_999_999,
+                }
+            },
+            "pending_actions": {
+                "chat:user": key_action_pending("key_disable", old_key, "olduser"),
+            },
+        }
+
+        with mock.patch("telegram_alerts.pickers.quota_accounts_for_picker", return_value=[{"key": other_key, "alias": "otheruser"}]), \
+             mock.patch("telegram_alerts.pickers.manually_disabled_keys", return_value=set()), \
+             mock.patch("telegram_alerts.pickers.short_code", return_value="newpicker"):
+            picker = handle_callback("menu:key_disable", state, chat_id="chat", user_id="user", message_id=1)
+
+        self.assertIn("otheruser", picker["text"] + str(picker["reply_markup"]))
+        self.assertNotIn("chat:user", state.get("pending_actions", {}))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            state_path = base / "state.json"
+            config_path = base / "config.yaml"
+            quota_path.write_text(json.dumps({"keys": [{"key": old_key, "name": "olduser", "daily_token_limit": 1}]}) + "\n", encoding="utf-8")
+            state_path.write_text("{}\n", encoding="utf-8")
+            config_path.write_text(f'api-keys:\n  - "{old_key}"\n', encoding="utf-8")
+
+            with mock.patch.object(actions_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(actions_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch("telegram_alerts.actions.backup_action_files") as backup:
+                result = handle_callback(
+                    f"confirm:{key_action_confirm_token('key_disable', old_key)}",
+                    state,
+                    chat_id="chat",
+                    user_id="user",
+                    message_id=1,
+                )
+
+            saved_state = json.loads(state_path.read_text(encoding="utf-8"))
+            config_text = config_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("API key disabled.", result["text"])
+        self.assertNotIn(old_key, saved_state.get("manually_disabled_keys", []))
+        self.assertIn(old_key, config_text)
+        self.assertNotIn("action_audit", state)
+        backup.assert_not_called()
+
+    def test_key_disable_confirm_from_wrong_user_or_chat_cannot_execute(self):
+        key = "wrong-operator-secret-key"
+        token = key_action_confirm_token("key_disable", key)
+        for chat_id, user_id in (("other-chat", "user"), ("chat", "other-user")):
+            with self.subTest(chat_id=chat_id, user_id=user_id):
+                state = {"pending_actions": {"chat:user": key_action_pending("key_disable", key, "wronguser")}}
+                with mock.patch("telegram_alerts.actions.execute_key_management") as execute:
+                    result = handle_callback(f"confirm:{token}", state, chat_id=chat_id, user_id=user_id, message_id=1)
+
+                self.assertEqual(result["text"], "No pending action.")
+                self.assertIn("chat:user", state.get("pending_actions", {}))
+                self.assertNotIn("action_audit", state)
+                execute.assert_not_called()
 
     def test_enable_key_flow_uses_exact_confirmation_template(self):
         state = {
@@ -3854,17 +3958,7 @@ class TelegramUxMessageTests(unittest.TestCase):
 
     def test_key_disable_verification_success_keeps_current_success_copy(self):
         key = "hung31-secret-7BfCD"
-        state = {
-            "pending_actions": {
-                "chat:user": {
-                    "code": "abc123",
-                    "type": "key_disable",
-                    "params": {"key": key, "alias": "tuanhung31"},
-                    "summary": "Pending key disable\n\nUser: tuanhung31",
-                    "expires_at": 99_999_999_999,
-                }
-            }
-        }
+        state = {"pending_actions": {"chat:user": key_action_pending("key_disable", key, "tuanhung31")}}
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             quota_path = base / "quotas.json"
@@ -3883,7 +3977,7 @@ class TelegramUxMessageTests(unittest.TestCase):
                  mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
                  mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
                  mock.patch.object(quota_config_module, "USAGE_DB", db_path):
-                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+                result = handle_callback(f"confirm:{key_action_confirm_token('key_disable', key)}", state, chat_id="chat", user_id="user", message_id=1)
 
         self.assertEqual(
             result["text"],
@@ -3899,17 +3993,7 @@ class TelegramUxMessageTests(unittest.TestCase):
 
     def test_key_enable_verification_warns_when_usage_registry_unavailable(self):
         key = "hung31-secret-7BfCD"
-        state = {
-            "pending_actions": {
-                "chat:user": {
-                    "code": "abc123",
-                    "type": "key_enable",
-                    "params": {"key": key, "alias": "tuanhung31"},
-                    "summary": "Pending key enable\n\nUser: tuanhung31",
-                    "expires_at": 99_999_999_999,
-                }
-            }
-        }
+        state = {"pending_actions": {"chat:user": key_action_pending("key_enable", key, "tuanhung31")}}
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             quota_path = base / "quotas.json"
@@ -3927,7 +4011,7 @@ class TelegramUxMessageTests(unittest.TestCase):
                  mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
                  mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
                  mock.patch.object(quota_config_module, "USAGE_DB", missing_db):
-                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+                result = handle_callback(f"confirm:{key_action_confirm_token('key_enable', key)}", state, chat_id="chat", user_id="user", message_id=1)
 
         self.assertIn("API key enabled.", result["text"])
         self.assertIn("Saved, but verification could not confirm usage registry.", result["text"])
@@ -3935,17 +4019,7 @@ class TelegramUxMessageTests(unittest.TestCase):
 
     def test_key_delete_verification_warns_when_proxy_config_still_lists_key(self):
         key = "delete-secret-key"
-        state = {
-            "pending_actions": {
-                "chat:user": {
-                    "code": "abc123",
-                    "type": "key_delete",
-                    "params": {"key": key, "alias": "delete-user"},
-                    "summary": "Pending key delete\n\nUser: delete-user",
-                    "expires_at": 99_999_999_999,
-                }
-            }
-        }
+        state = {"pending_actions": {"chat:user": key_action_pending("key_delete", key, "delete-user")}}
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             quota_path = base / "quotas.json"
@@ -3970,7 +4044,7 @@ class TelegramUxMessageTests(unittest.TestCase):
                  mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
                  mock.patch.object(quota_config_module, "USAGE_DB", db_path), \
                  mock.patch.object(actions_module, "write_config_api_keys", side_effect=stale_proxy_write):
-                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+                result = handle_callback(f"confirm:{key_action_confirm_token('key_delete', key)}", state, chat_id="chat", user_id="user", message_id=1)
 
         self.assertIn("API key deleted.", result["text"])
         self.assertIn("Saved, but verification found a mismatch: proxy config still lists this key.", result["text"])
@@ -4019,19 +4093,62 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertIn("Saved, but verification found a mismatch: state markers changed during quota update.", result["text"])
         self.assertNotIn(key, result["text"].split("Saved, but", 1)[1])
 
+    def test_quota_set_does_not_create_or_readd_manual_disabled_marker(self):
+        key = "quota-marker-secret-key"
+        other_key = "already-manual-secret-key"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            state_path = base / "state.json"
+            quota_path.write_text(
+                json.dumps({"keys": [{"key": key, "name": "quota-user", "daily_token_limit": 1}]}) + "\n",
+                encoding="utf-8",
+            )
+            state_path.write_text(json.dumps({"manually_disabled_keys": [other_key]}) + "\n", encoding="utf-8")
+
+            with mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch("telegram_alerts.actions.load_cpa_alias_map", return_value={key: "quota-user"}), \
+                 mock.patch("telegram_alerts.actions.backup_action_files", return_value="backup"):
+                execute_quota_set({"query": key, "daily": 20_000_000, "weekly": "default"})
+
+            saved_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved_state.get("manually_disabled_keys"), [other_key])
+        self.assertNotIn(key, saved_state.get("manually_disabled_keys", []))
+
+    def test_key_delete_does_not_convert_active_key_to_manual_disabled(self):
+        key = "delete-active-secret-key"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            quota_path = base / "quotas.json"
+            state_path = base / "state.json"
+            config_path = base / "config.yaml"
+            quota_path.write_text(
+                json.dumps({"keys": [{"key": key, "name": "delete-user", "daily_token_limit": 1}]}) + "\n",
+                encoding="utf-8",
+            )
+            state_path.write_text("{}\n", encoding="utf-8")
+            config_path.write_text(f'api-keys:\n  - "{key}"\n', encoding="utf-8")
+
+            with mock.patch.object(actions_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch.object(actions_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
+                 mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
+                 mock.patch.object(quota_config_module, "CLIPROXY_CONFIG", config_path), \
+                 mock.patch("telegram_alerts.actions.backup_action_files"), \
+                 mock.patch("telegram_alerts.actions.soft_delete_cpa_api_key"):
+                execute_key_management("key_delete", {"key": key, "alias": "delete-user"})
+
+            saved_state = json.loads(state_path.read_text(encoding="utf-8"))
+            saved_quotas = json.loads(quota_path.read_text(encoding="utf-8"))
+
+        self.assertNotIn(key, saved_state.get("manually_disabled_keys", []))
+        self.assertEqual(saved_quotas.get("keys"), [])
+
     def test_key_disable_confirm_returns_operator_success_after_mutation(self):
         key = "hung31-secret-7BfCD"
-        state = {
-            "pending_actions": {
-                "chat:user": {
-                    "code": "abc123",
-                    "type": "key_disable",
-                    "params": {"key": key, "alias": "tuanhung31"},
-                    "summary": "Pending key disable\n\nUser: tuanhung31",
-                    "expires_at": 99_999_999_999,
-                }
-            }
-        }
+        state = {"pending_actions": {"chat:user": key_action_pending("key_disable", key, "tuanhung31")}}
 
         with mock.patch("telegram_alerts.actions.parse_api_keys_block", return_value=[key]), \
              mock.patch("telegram_alerts.actions.write_config_api_keys"), \
@@ -4041,7 +4158,7 @@ class TelegramUxMessageTests(unittest.TestCase):
              mock.patch("telegram_alerts.actions.backup_action_files"), \
              mock.patch("telegram_alerts.actions.verify_mutation", return_value=mock.Mock(warning_line=mock.Mock(return_value=""))), \
              mock.patch("telegram_alerts.actions.CLIPROXY_CONFIG", mock.Mock(read_text=mock.Mock(return_value="api-keys: []"))):
-            result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+            result = handle_callback(f"confirm:{key_action_confirm_token('key_disable', key)}", state, chat_id="chat", user_id="user", message_id=1)
 
         self.assertEqual(
             result["text"],
@@ -4057,22 +4174,54 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertEqual([[button["callback_data"] for button in row] for row in keyboard], [["after:menu:key_status", "after:menu:key_disable"], ["after:menu:back"]])
         self.assertNotIn(key, result["text"])
         self.assertNotIn("chat:user", state.get("pending_actions", {}))
-        self.assertEqual(state["action_audit"][-1]["type"], "key_disable")
-        self.assertEqual(state["action_audit"][-1]["key"], key)
+        audit_item = state["action_audit"][-1]
+        self.assertEqual(audit_item["type"], "key_disable")
+        self.assertEqual(audit_item["key_ref"], test_key_ref(key))
+        self.assertEqual(audit_item["target_alias"], "tuanhung31")
+        self.assertEqual(audit_item["chat_id"], "chat")
+        self.assertEqual(audit_item["telegram_user_id"], "user")
+        self.assertEqual(audit_item["confirmed_at"], audit_item["at"])
+        self.assertIn("action_id", audit_item)
+        self.assertNotIn(key, json.dumps(audit_item, sort_keys=True))
+
+    def test_action_audit_includes_operator_username_and_no_raw_key_from_callback_update(self):
+        key = "audit-secret-key"
+        state = {"pending_actions": {"chat:user": key_action_pending("key_disable", key, "audituser")}}
+        token = key_action_confirm_token("key_disable", key)
+        update = {
+            "update_id": 100,
+            "callback_query": {
+                "id": "callback-1",
+                "from": {"id": "user", "username": "operator_name"},
+                "message": {"message_id": 44, "chat": {"id": "chat"}},
+                "data": f"confirm:{token}",
+            },
+        }
+
+        with mock.patch.object(handlers_module, "DRY_RUN", False), \
+             mock.patch.object(handlers_module, "TELEGRAM_BOT_TOKEN", "token"), \
+             mock.patch("telegram_alerts.handlers.allowed_chat_ids", return_value={"chat"}), \
+             mock.patch("telegram_alerts.handlers.allowed_user_ids", return_value={"user"}), \
+             mock.patch("telegram_alerts.handlers.is_authorized", return_value=True), \
+             mock.patch("telegram_alerts.handlers.telegram_get_updates", return_value=[update]), \
+             mock.patch("telegram_alerts.handlers.answer_callback_query_async"), \
+             mock.patch("telegram_alerts.handlers.edit_telegram_message_result", return_value={"ok": True}), \
+             mock.patch("telegram_alerts.actions.execute_key_management"), \
+             mock.patch("telegram_alerts.actions.verify_mutation", return_value=mock.Mock(warning_line=mock.Mock(return_value=""))):
+            handled = process_commands(state)
+
+        self.assertEqual(handled, 1)
+        audit_item = state["action_audit"][-1]
+        self.assertEqual(audit_item["telegram_username"], "operator_name")
+        self.assertEqual(audit_item["telegram_user_id"], "user")
+        self.assertEqual(audit_item["chat_id"], "chat")
+        self.assertEqual(audit_item["key_ref"], test_key_ref(key))
+        self.assertNotIn(key, json.dumps(audit_item, sort_keys=True))
+        self.assertNotIn("key", audit_item)
 
     def test_key_enable_confirm_returns_operator_success_after_mutation(self):
         key = "hung31-secret-7BfCD"
-        state = {
-            "pending_actions": {
-                "chat:user": {
-                    "code": "abc123",
-                    "type": "key_enable",
-                    "params": {"key": key, "alias": "tuanhung31"},
-                    "summary": "Pending key enable\n\nUser: tuanhung31",
-                    "expires_at": 99_999_999_999,
-                }
-            }
-        }
+        state = {"pending_actions": {"chat:user": key_action_pending("key_enable", key, "tuanhung31")}}
 
         with mock.patch("telegram_alerts.actions.parse_api_keys_block", return_value=[]), \
              mock.patch("telegram_alerts.actions.write_config_api_keys"), \
@@ -4082,7 +4231,7 @@ class TelegramUxMessageTests(unittest.TestCase):
              mock.patch("telegram_alerts.actions.backup_action_files"), \
              mock.patch("telegram_alerts.actions.verify_mutation", return_value=mock.Mock(warning_line=mock.Mock(return_value=""))), \
              mock.patch("telegram_alerts.actions.CLIPROXY_CONFIG", mock.Mock(read_text=mock.Mock(return_value="api-keys: []"))):
-            result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+            result = handle_callback(f"confirm:{key_action_confirm_token('key_enable', key)}", state, chat_id="chat", user_id="user", message_id=1)
 
         self.assertEqual(
             result["text"],
@@ -4098,22 +4247,17 @@ class TelegramUxMessageTests(unittest.TestCase):
         self.assertEqual([[button["callback_data"] for button in row] for row in keyboard], [["after:menu:key_status", "after:menu:key_enable"], ["after:menu:back"]])
         self.assertNotIn(key, result["text"])
         self.assertNotIn("chat:user", state.get("pending_actions", {}))
-        self.assertEqual(state["action_audit"][-1]["type"], "key_enable")
-        self.assertEqual(state["action_audit"][-1]["key"], key)
+        audit_item = state["action_audit"][-1]
+        self.assertEqual(audit_item["type"], "key_enable")
+        self.assertEqual(audit_item["key_ref"], test_key_ref(key))
+        self.assertEqual(audit_item["target_alias"], "tuanhung31")
+        self.assertEqual(audit_item["chat_id"], "chat")
+        self.assertEqual(audit_item["telegram_user_id"], "user")
+        self.assertNotIn(key, json.dumps(audit_item, sort_keys=True))
 
     def test_stale_key_enable_confirm_cleans_marker_without_success_audit(self):
         key = "phat-Z7tJiOiax1TRyPbKk"
-        state = {
-            "pending_actions": {
-                "chat:user": {
-                    "code": "abc123",
-                    "type": "key_enable",
-                    "params": {"key": key, "alias": "letanphat"},
-                    "summary": "Pending key enable\n\nUser: letanphat",
-                    "expires_at": 99_999_999_999,
-                }
-            }
-        }
+        state = {"pending_actions": {"chat:user": key_action_pending("key_enable", key, "letanphat")}}
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -4132,7 +4276,7 @@ class TelegramUxMessageTests(unittest.TestCase):
                  mock.patch.object(quota_config_module, "QUOTA_CONFIG", quota_path), \
                  mock.patch.object(quota_config_module, "QUOTA_STATE", state_path), \
                  mock.patch("telegram_alerts.actions.backup_action_files") as backup:
-                result = handle_callback("confirm:abc123", state, chat_id="chat", user_id="user", message_id=1)
+                result = handle_callback(f"confirm:{key_action_confirm_token('key_enable', key)}", state, chat_id="chat", user_id="user", message_id=1)
 
             saved_state = json.loads(state_path.read_text(encoding="utf-8"))
 
@@ -4143,33 +4287,13 @@ class TelegramUxMessageTests(unittest.TestCase):
         backup.assert_not_called()
 
     def test_enable_key_flow_only_enables_manually_disabled_keys_not_quota_disabled_keys(self):
-        manual_state = {
-            "pending_actions": {
-                "chat:user": {
-                    "code": "abc123",
-                    "type": "key_enable",
-                    "params": {"key": "alice-secret-key", "alias": "alice"},
-                    "summary": "Confirm Enable Key\n\nUser: alice",
-                    "expires_at": 99_999_999_999,
-                }
-            }
-        }
-        quota_state = {
-            "pending_actions": {
-                "chat:user": {
-                    "code": "abc123",
-                    "type": "key_enable",
-                    "params": {"key": "quota-secret-key", "alias": "quota"},
-                    "summary": "Confirm Enable Key\n\nUser: quota",
-                    "expires_at": 99_999_999_999,
-                }
-            }
-        }
+        manual_state = {"pending_actions": {"chat:user": key_action_pending("key_enable", "alice-secret-key", "alice")}}
+        quota_state = {"pending_actions": {"chat:user": key_action_pending("key_enable", "quota-secret-key", "quota")}}
 
         with mock.patch("telegram_alerts.actions.execute_key_management", return_value=None) as execute:
-            manual = handle_callback("confirm:abc123", manual_state, chat_id="chat", user_id="user", message_id=1)
+            manual = handle_callback(f"confirm:{key_action_confirm_token('key_enable', 'alice-secret-key')}", manual_state, chat_id="chat", user_id="user", message_id=1)
         with mock.patch("telegram_alerts.actions.execute_key_management", side_effect=ValueError("quota-disabled keys cannot be manually enabled from this action")):
-            quota = handle_callback("confirm:abc123", quota_state, chat_id="chat", user_id="user", message_id=1)
+            quota = handle_callback(f"confirm:{key_action_confirm_token('key_enable', 'quota-secret-key')}", quota_state, chat_id="chat", user_id="user", message_id=1)
 
         execute.assert_called_once()
         self.assertEqual(manual["text"].splitlines()[0], "API key enabled.")

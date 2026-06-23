@@ -17,7 +17,7 @@ from .settings import (
     CLIPROXY_CONFIG,
     QUOTA_STATE,
 )
-from .utils import log, mask_key, normalize_limit, now_ts, short_code
+from .utils import key_ref, log, mask_key, normalize_limit, now_ts, short_code
 from .storage import load_json
 from .provider_labels import infer_provider_from_values, provider_display_label
 from .quota_config import format_effective_weekly_for_reply, format_limit_for_reply, format_operator_quota_limit, load_cpa_key_records, load_quotas_json, parse_api_keys_block, preferred_quota_alias
@@ -173,7 +173,9 @@ def matching_recent_bot_action(state: dict[str, Any] | None, event: ChangeEvent,
             continue
         if item.get("type") != expected_action:
             continue
-        if str(item.get("key") or "").strip() != event_key:
+        item_key = str(item.get("key") or "").strip()
+        item_key_ref = str(item.get("key_ref") or "").strip()
+        if item_key != event_key and item_key_ref != key_ref(event_key):
             continue
         try:
             action_at = int(item["at"])

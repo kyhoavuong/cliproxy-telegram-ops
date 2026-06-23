@@ -50,7 +50,7 @@ from .snapshot import (
     capacity_demand_rate_estimate,
 )
 from .logs import build_errors_reply
-from .actions import cancel_pending, cleanup_message_ids_from, clear_pending_input, execute_pending_action, handle_pending_input, pending_scope
+from .actions import cancel_pending, cancel_token_for_pending, cleanup_message_ids_from, clear_pending_action, clear_pending_input, execute_pending_action, handle_pending_input, pending_scope
 from .pickers import (
     build_daily_quota_limit_picker,
     create_key_management_from_picker,
@@ -457,14 +457,14 @@ def callback_ack_text(data):
         return "Loading..."
     return ""
 
-def handle_callback(data: str, state: dict[str, Any], chat_id: str | None = None, user_id: str | None = None, message_id: int | str | None = None) -> str | TelegramReply:
+def handle_callback(data: str, state: dict[str, Any], chat_id: str | None = None, user_id: str | None = None, message_id: int | str | None = None, telegram_username: str | None = None) -> str | TelegramReply:
     """Route one inline callback and mutate only the scoped state needed for that flow.
     
     Reply dicts with edit_message=True ask process_commands() to edit the tapped
     message first, then fall back to send/delete when Telegram cannot edit it."""
     data = str(data or "")
     if data.startswith("after:"):
-        result = handle_callback(data[len("after:"):], state, chat_id=chat_id, user_id=user_id, message_id=message_id)
+        result = handle_callback(data[len("after:"):], state, chat_id=chat_id, user_id=user_id, message_id=message_id, telegram_username=telegram_username)
         if isinstance(result, dict):
             result = dict(result)
             result.pop("edit_message", None)
@@ -473,7 +473,7 @@ def handle_callback(data: str, state: dict[str, Any], chat_id: str | None = None
         return {"text": result, "delete_message": True}
     if data.startswith("confirm:"):
         code = data.split(":", 1)[1]
-        result = execute_pending_action(state, code, chat_id=chat_id, user_id=user_id)
+        result = execute_pending_action(state, code, chat_id=chat_id, user_id=user_id, telegram_username=telegram_username)
         if result is None:
             return silent_reply()
         if isinstance(result, dict):
@@ -488,7 +488,7 @@ def handle_callback(data: str, state: dict[str, Any], chat_id: str | None = None
         if not isinstance(pending, dict) and isinstance(state.get("pending_action"), dict):
             pending = state.get("pending_action")
         pending_type = str((pending or {}).get("type") or "")
-        pending_code = str((pending or {}).get("code") or "")
+        pending_code = cancel_token_for_pending(pending) if isinstance(pending, dict) else ""
         cleanup_message_ids = cleanup_message_ids_from((pending or {}).get("cleanup_message_ids"))
         cancel_pending(state, code=code, chat_id=chat_id, user_id=user_id)
         if pending_type in {"key_disable", "key_enable", "key_delete"} and pending_code == code:
@@ -569,8 +569,10 @@ def handle_callback(data: str, state: dict[str, Any], chat_id: str | None = None
         snapshot = get_capacity_check_snapshot(state, live=True)
         return {"text": build_capacity_reply(snapshot, live_capacity_demand_rate(snapshot)), "reply_markup": back_keyboard("menu:capacity_refresh"), "edit_message": True}
     if data == "menu:key_status":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         return {"text": build_key_status_reply(get_snapshot(state, live=False, interactive=True)), "reply_markup": key_status_keyboard(), "edit_message": True}
     if data == "menu:key_status_refresh":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         return {"text": build_key_status_reply(build_quota_rows_snapshot()), "reply_markup": key_status_keyboard(), "edit_message": True}
     if data == "menu:top":
         return {"text": build_top_reply(get_snapshot(state, live=False, interactive=True)), "reply_markup": top_users_keyboard(), "edit_message": True}
@@ -653,36 +655,43 @@ def handle_callback(data: str, state: dict[str, Any], chat_id: str | None = None
     if data == "menu:errors_refresh":
         return {"text": get_errors_reply(state, "all", live=True), "reply_markup": errors_keyboard(), "edit_message": True}
     if data == "menu:usage":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         clear_pending_input(state, chat_id=chat_id, user_id=user_id)
         result = prompt_usage_picker(state, chat_id=chat_id, user_id=user_id)
         result["edit_message"] = True
         return result
     if data == "menu:key_lookup":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         clear_pending_input(state, chat_id=chat_id, user_id=user_id)
         result = prompt_key_reveal_picker(state, chat_id=chat_id, user_id=user_id)
         result["edit_message"] = True
         return result
     if data == "menu:key_disable":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         clear_pending_input(state, chat_id=chat_id, user_id=user_id)
         result = prompt_key_management_picker(state, "disable", chat_id=chat_id, user_id=user_id)
         result["edit_message"] = True
         return result
     if data == "menu:key_enable":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         clear_pending_input(state, chat_id=chat_id, user_id=user_id)
         result = prompt_key_management_picker(state, "enable", chat_id=chat_id, user_id=user_id)
         result["edit_message"] = True
         return result
     if data == "menu:key_delete":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         clear_pending_input(state, chat_id=chat_id, user_id=user_id)
         result = prompt_key_management_picker(state, "delete", chat_id=chat_id, user_id=user_id)
         result["edit_message"] = True
         return result
     if data == "menu:key_create":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         clear_pending_input(state, chat_id=chat_id, user_id=user_id)
         result = prompt_key_create(state, chat_id=chat_id, user_id=user_id, message_id=message_id)
         result["edit_message"] = True
         return result
     if data == "menu:quota_set":
+        clear_pending_action(state, chat_id=chat_id, user_id=user_id)
         clear_pending_input(state, chat_id=chat_id, user_id=user_id)
         result = prompt_quota_picker(state, chat_id=chat_id, user_id=user_id)
         result["edit_message"] = True
@@ -735,6 +744,7 @@ def process_commands(state: dict[str, Any], dry_run: bool = False) -> int:
                     chat_id=chat_id,
                     user_id=user_id,
                     message_id=message.get("message_id"),
+                    telegram_username=sender.get("username"),
                 )
             except Exception as exc:
                 reply_data = f"Command failed: {exc}"
