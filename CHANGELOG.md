@@ -6,7 +6,9 @@ This project follows a lightweight release format inspired by Keep a Changelog a
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Updated portable examples to CLIProxyAPI v7.2.38.
 
 ## [0.2.6] - 2026-06-24
 
