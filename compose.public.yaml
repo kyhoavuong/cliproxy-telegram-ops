@@ -1,6 +1,6 @@
 services:
   cliproxy:
-    image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:v7.2.38}
+    image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:v7.2.42}
     container_name: cliproxy
     restart: unless-stopped
     environment:
