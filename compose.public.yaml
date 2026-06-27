@@ -15,7 +15,7 @@ services:
       - cliproxy
 
   usage-keeper:
-    image: ${USAGE_KEEPER_IMAGE:-ghcr.io/willxup/cpa-usage-keeper:v1.12.0}
+    image: ${USAGE_KEEPER_IMAGE:-ghcr.io/willxup/cpa-usage-keeper:v1.12.1}
     container_name: cpa-usage-keeper
     restart: unless-stopped
     environment:

@@ -60,7 +60,7 @@ The compose file also uses upstream images:
 
 ```text
 eceasy/cli-proxy-api:v7.2.42
-ghcr.io/willxup/cpa-usage-keeper:v1.12.0
+ghcr.io/willxup/cpa-usage-keeper:v1.12.1
 cloudflare/cloudflared:latest
 ```
 
