@@ -8,8 +8,8 @@ This project follows a lightweight release format inspired by Keep a Changelog a
 
 ### Changed
 
-- Updated portable examples to CLIProxyAPI v7.2.42.
-- Updated portable examples to CPA Usage Keeper v1.12.1.
+- Updated portable examples to CLIProxyAPI v7.2.47.
+- Updated portable examples to CPA Usage Keeper v1.12.2.
 
 ## [0.2.6] - 2026-06-24
 
